@@ -2,7 +2,7 @@
 
 bcwallet.rb is an educational Bitcoin client written in Ruby language.
 
-The client is written for (Bitcoin no shikumi)[http://bitcoin.peryaudo.org/] ("The Mechanism of Bitcoin"), a Japanese website describes Bitcoin from the technical perspective.
+The client is written for [Bitcoin no shikumi](http://bitcoin.peryaudo.org/) ("The Mechanism of Bitcoin"), a Japanese website describes Bitcoin from the technical perspective.
 
 ## Features
 
