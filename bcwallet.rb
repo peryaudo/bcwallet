@@ -668,11 +668,11 @@ class Network
     case rw
     when :read
       len = integer(:read)
-      res = read_bytes(len)
-      return res
+      return read_bytes(len)
     when :write
       integer(:write, val.length)
       write_bytes(val)
+      return val
     end
   end
 
@@ -684,6 +684,7 @@ class Network
       return {}
     when :write
       write_bytes([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*v'))
+      return val
     end
   end
 
@@ -699,6 +700,7 @@ class Network
       unless val then
         uint8(:write, 0)
       end
+      return val
     end
   end
 
@@ -716,81 +718,50 @@ class Network
       val.each do |v|
         elm.call(:write, v)
       end
+      return val
     end
   end
-  def hash256 (rw, val = nil)
+  def hash256(rw, val = nil)
     case rw
     when :read
       res = read_bytes(32)
       return res
     when :write
       write_bytes(val)
+      return val
     end
   end
 
-  def inv_vect(rw, val = nil)
-    case rw
-    when :read
-      type = uint32(:read)
-      hash = hash256(:read)
-      return {:type => type, :hash => hash}
-    when :write
-      uint32(:write, val[:type])
-      hash256(:write, val[:hash])
-    end
+  def inv_vect(rw, val = {})
+    return { :type => uint32(rw, val[:type]), :hash => hash256(rw, val[:hash]) }
   end
 
-  def block_hash(rw, val = nil)
+  def block_hash(rw, val = {})
     case rw
     when :read
       return Key.hash256(@r_payload[0, 80])
     end
   end
 
-  def tx_hash(rw, val = nil)
+  def tx_hash(rw, val = {})
     case rw
     when :read
       return Key.hash256(@r_payload)
     end
   end
 
-  def outpoint(rw, val = nil)
-    case rw
-    when :read
-      hash = hash256(:read)
-      index = uint32(:read)
-      return { :hash => hash, :index => index }
-    when :write
-      hash256(:write, val[:hash])
-      uint32(:write, val[:index])
-    end
+  def outpoint(rw, val = {})
+    return { :hash => hash256(rw, val[:hash]), :index => uint32(rw, val[:index]) }
   end
 
-  def tx_in(rw, val = nil)
-    case rw
-    when :read
-      previous_output = outpoint(:read)
-      signature_script = string(:read)
-      sequence = uint32(:read)
-      return { :previous_output => previous_output,
-               :signature_script => signature_script, :sequence => sequence }
-    when :write
-      outpoint(:write, val[:previous_output])
-      string(:write, val[:signature_script])
-      uint32(:write, val[:sequence])
-    end
+  def tx_in(rw, val = {})
+    return { :previous_output  => outpoint(rw, val[:previous_output]),
+             :signature_script => string(rw, val[:signature_script]),
+             :sequence         => uint32(rw, val[:sequence]) }
   end
 
-  def tx_out(rw, val = nil)
-    case rw
-    when :read
-      value = uint64(:read)
-      pk_script = string(:read)
-      return { :value => value, :pk_script => pk_script }
-    when :write
-      uint64(:write, val[:value])
-      string(:write, val[:pk_script])
-    end
+  def tx_out(rw, val = {})
+    return { :value => uint64(rw, val[:value]), :pk_script => string(rw, val[:pk_script]) }
   end
 
 
