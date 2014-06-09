@@ -243,11 +243,7 @@ public
     c1 = 0xcc9e2d51
     c2 = 0x1b873593
 
-    num_blocks = data.length >> 2
-
-    num_blocks.times do |i|
-      k1 = data[4 * i, 4].unpack('V').first
-
+    data.unpack('V*').each do |k1|
       k1 = (k1 * c1) & mask
       k1 = rotate_left_32(k1, 15)
       k1 = (k1 * c2) & mask
@@ -257,8 +253,9 @@ public
       h1 = (h1 * 5 + 0xe6546b64) & mask
     end
 
-    # remaining bytes
-    k1 = (data[(num_blocks << 2)..-1] + "\0" * (4 - (data.length & 3))).unpack('V').first
+    padded_remaining_bytes = data[(data.length & (mask ^ 3))..-1] + "\0" * (4 - (data.length & 3))
+
+    k1 = padded_remaining_bytes.unpack('V').first
     k1 = (k1 * c1) & mask
     k1 = rotate_left_32(k1, 15)
     k1 = (k1 * c2) & mask
