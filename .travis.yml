@@ -5,6 +5,7 @@ rvm:
 
 install:
   - gem install coveralls
+  - gem install minitest
 
 script:
   - ruby test_bcwallet.rb
