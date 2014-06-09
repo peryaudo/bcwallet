@@ -1,3 +1,8 @@
+if ENV['CI'] then
+  require 'coveralls'
+  Coveralls.wear!
+end
+
 require 'minitest/unit'
 require './bcwallet'
 
