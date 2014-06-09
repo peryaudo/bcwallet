@@ -1137,6 +1137,15 @@ private
     warn "    send <name> <to> <amount>\ttransfer coins to the Bitcoin address"
   end
 
+  def require_args(number)
+    if @argv.length < number + 1 then
+      usage 'missing arguments'
+      return true
+    else
+      return false
+    end
+  end
+
   def load_keys
     @keys = {}
 
@@ -1150,7 +1159,13 @@ private
     end
   end
 
+  def init_network
+    @network = Network.new(@keys, @data_file_name)
+  end
+
   def wait_for_sync(mode = nil)
+    @network.sync
+
     rotate = ['/', '-', '\\', '|']
     cur = 0
 
@@ -1214,11 +1229,9 @@ private
 
   def balance
     STDERR.print "loading data ...\r"
-    @network = Network.new(@keys, @data_file_name)
 
-    @network.sync()
-
-    wait_for_sync()
+    init_network
+    wait_for_sync
 
     puts 'Balances for available Bitcoin addresses: '
 
@@ -1231,32 +1244,29 @@ private
   end
 
   def send(name, to, amount)
-      return usage "an address named #{name} doesn't exist" unless @keys.has_key?(name)
+    return usage "an address named #{name} doesn't exist" unless @keys.has_key?(name)
 
-      @network = Network.new(@keys, @data_file_name)
-      @network.sync()
+    init_network
+    wait_for_sync
 
-      wait_for_sync()
+    STDERR.print "Are you sure you want to send\n"
+    STDERR.print "    #{sprintf('%.8f', amount * Rational(1, 10**8))} BTC\n"
+    STDERR.print "from\n    \"#{name}\"\nto\n    \"#{to}\"\n? (yes/no): "
 
-      STDERR.print "Are you sure you want to send\n"
-      STDERR.print "    #{sprintf('%.8f', amount * Rational(1, 10**8))} BTC\n"
-      STDERR.print "from\n    \"#{name}\"\nto\n    \"#{to}\"\n? (yes/no): "
-      
-      if STDIN.gets.chomp.downcase == 'yes' then
-        @network.send(@keys[name], to, amount)
-        @network.sync()
+    if STDIN.gets.chomp.downcase == 'yes' then
+      @network.send(@keys[name], to, amount)
 
-        wait_for_sync()
-      end
+      wait_for_sync
+    end
 
-      return
+    return
   end
 
   def block(hash)
-      @network = Network.new(@keys, @data_file_name)
-      p @network.data[:blocks][[hash].pack('H*').reverse]
+    init_network
+    p @network.data[:blocks][[hash].pack('H*').reverse]
 
-      return
+    return
   end
 
 public
@@ -1264,6 +1274,7 @@ public
     @argv = argv
     @keys_file_name = keys_file_name
     @data_file_name = data_file_name
+    @network = nil
   end
 
   def run
@@ -1273,40 +1284,35 @@ public
 
     case @argv.first
     when 'generate'
-      return usage 'an address name required' if @argv.length < 2
+      return if require_args(1)
 
-      name = @argv[1]
-
-      return generate(name)
+      # name = @argv[1]
+      return generate(@argv[1])
 
     when 'list'
-      list
+      return list()
 
     when 'export'
-      return usage 'an address name required' if @argv.length < 2
+      return if require_args(1)
 
-      name = @argv[1]
-
-      return export(name)
+      # name = @argv[1]
+      return export(@argv[1])
 
     when 'balance'
       return balace()
 
     when 'send'
-      return usage 'arguments required' if @argv.length < 4
+      return if require_args(3)
 
-      name = @argv[1]
-      to = @argv[2]
-      amount = @argv[3].to_r * Rational(10 ** 8)
-
-      return send(name, to, amount)
+      # name = @argv[1], to = @argv[2], amount = @argv[3] (converted into satoshi)
+      return send(@argv[1], @argv[2], @argv[3].to_r * Rational(10 ** 8))
 
     when 'block'
-      return usage 'arguments required' if @argv.length < 2
+      return if require_args(1)
 
-      hash = @argv[1]
+      # hash = @argv[1]
+      return block(@argv[1])
 
-      return block(hash)
     else
       return usage 'invalid command'
     end
