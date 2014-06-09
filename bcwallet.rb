@@ -546,11 +546,11 @@ class Network
 
     raise 'incorrect checksum' if Key.hash256(@r_payload)[0, 4] != checksum
 
-    raise "unknown message #{command}" unless message_defs().has_key?(command)
+    raise "unknown message #{command}" unless message_defs.has_key?(command)
 
     res = { :command => command }
 
-    message_defs()[command].each do |message_def|
+    message_defs[command].each do |message_def|
       res[message_def.first] = message_def.last.call(:read)
     end
 
@@ -562,7 +562,7 @@ class Network
   #
   def serialize_message(message)
     @payload = ''
-    message_defs()[message[:command]].each do |message_def|
+    message_defs[message[:command]].each do |message_def|
       message_def.last.call(:write, message[message_def.first]) unless message_def.first == :hash
     end
   end
@@ -594,197 +594,232 @@ class Network
   end
 
   #
+  # Serializer & deserializer methods
+  #
+
+  def read_bytes(len)
+    res = @r_payload[0, len]
+    @r_payload = @r_payload[len..-1]
+    return res
+  end
+
+  def write_bytes(val)
+    @payload += val
+  end
+
+  def fixed_integer(templ, len, rw, val = nil)
+    case rw
+    when :read 
+      res = read_bytes(len).unpack(templ).first
+      return res
+    when :write
+      write_bytes([val].pack(templ))
+    end
+  end
+
+  def uint8(rw, val = nil)
+    return fixed_integer('C', 1, rw, val)
+  end
+
+  def uint16(rw, val = nil)
+    return fixed_integer('v', 2, rw, val)
+  end
+
+  def uint32(rw, val = nil)
+    return fixed_integer('V', 4, rw, val)
+  end
+
+  def uint64(rw, val = nil)
+    return fixed_integer('Q', 8, rw, val)
+  end
+
+  def integer(rw, val = nil)
+    case rw
+    when :read
+      top = uint8(:read)
+
+      if top < 0xfd then
+        return top
+      elsif top == 0xfd then
+        return uint16(:read)
+      elsif top == 0xfe then
+        return uint32(:read)
+      elsif top == 0xff then
+        return uint64(:read)
+      end
+
+    when :write
+      if val < 0xfd then
+        uint8(:write, val)
+      elsif val <= 0xffff then
+        uint8(:write, 0xfd)
+        uint16(:write, val)
+      elsif val <= 0xffffffff then
+        uint8(:write, 0xfe)
+        uint32(:write, val)
+      else
+        uint8(:write, 0xff)
+        uint64(:write, val)
+      end
+    end
+  end
+
+  def string(rw, val = nil)
+    case rw
+    when :read
+      len = integer(:read)
+      res = read_bytes(len)
+      return res
+    when :write
+      integer(:write, val.length)
+      write_bytes(val)
+    end
+  end
+
+  def net_addr(rw, val = nil)
+    # accurate serializing is not necessary
+    case rw
+    when :read
+      read_bytes(26)
+      return {}
+    when :write
+      write_bytes([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*v'))
+    end
+  end
+
+  def relay_flag(rw, val = nil)
+    case rw
+    when :read
+      if @r_payload.length > 0 then
+        return uint8(:read)
+      else
+        return true
+      end
+    when :write
+      unless val then
+        uint8(:write, 0)
+      end
+    end
+  end
+
+  def array(elm, rw, val = nil)
+    case rw
+    when :read
+      count = integer(:read)
+      res = []
+      count.times do
+        res.push elm.call(:read)
+      end
+      return res
+    when :write
+      integer(:write, val.length)
+      val.each do |v|
+        elm.call(:write, v)
+      end
+    end
+  end
+  def hash256 (rw, val = nil)
+    case rw
+    when :read
+      res = read_bytes(32)
+      return res
+    when :write
+      write_bytes(val)
+    end
+  end
+
+  def inv_vect(rw, val = nil)
+    case rw
+    when :read
+      type = uint32(:read)
+      hash = hash256(:read)
+      return {:type => type, :hash => hash}
+    when :write
+      uint32(:write, val[:type])
+      hash256(:write, val[:hash])
+    end
+  end
+
+  def block_hash(rw, val = nil)
+    case rw
+    when :read
+      return Key.hash256(@r_payload[0, 80])
+    end
+  end
+
+  def tx_hash(rw, val = nil)
+    case rw
+    when :read
+      return Key.hash256(@r_payload)
+    end
+  end
+
+  def outpoint(rw, val = nil)
+    case rw
+    when :read
+      hash = hash256(:read)
+      index = uint32(:read)
+      return { :hash => hash, :index => index }
+    when :write
+      hash256(:write, val[:hash])
+      uint32(:write, val[:index])
+    end
+  end
+
+  def tx_in(rw, val = nil)
+    case rw
+    when :read
+      previous_output = outpoint(:read)
+      signature_script = string(:read)
+      sequence = uint32(:read)
+      return { :previous_output => previous_output,
+               :signature_script => signature_script, :sequence => sequence }
+    when :write
+      outpoint(:write, val[:previous_output])
+      string(:write, val[:signature_script])
+      uint32(:write, val[:sequence])
+    end
+  end
+
+  def tx_out(rw, val = nil)
+    case rw
+    when :read
+      value = uint64(:read)
+      pk_script = string(:read)
+      return { :value => value, :pk_script => pk_script }
+    when :write
+      uint64(:write, val[:value])
+      string(:write, val[:pk_script])
+    end
+  end
+
+
+  #
   # Message definitions.
   #
   def message_defs
     return @message_defs if @message_defs
 
-    read_bytes = lambda do |len|
-      res = @r_payload[0, len]
-      @r_payload = @r_payload[len..-1]
-      return res
-    end
+    uint32 = self.method(:uint32)
+    uint64 = self.method(:uint64)
+    string = self.method(:string)
 
-    write_bytes = lambda do |val|
-      @payload += val
-    end
+    net_addr   = self.method(:net_addr)
+    relay_flag = self.method(:relay_flag)
 
-    fixed_integer = lambda do |templ, len, rw, val = nil|
-      case rw
-      when :read 
-        res = read_bytes.call(len).unpack(templ).first
-        return res
-      when :write
-        write_bytes.call([val].pack(templ))
-      end
-    end
+    array = self.method(:array).to_proc
 
-    uint8  = fixed_integer.curry['C', 1]
-    uint16 = fixed_integer.curry['v', 2]
-    uint32 = fixed_integer.curry['V', 4]
-    uint64 = fixed_integer.curry['Q', 8]
+    hash256    = self.method(:hash256)
 
-    integer = lambda do |rw, val = nil|
-      case rw
-      when :read
-        top = uint8.call(:read)
+    inv_vect   = self.method(:inv_vect)
 
-        if top < 0xfd then
-          return top
-        elsif top == 0xfd then
-          return uint16.call(:read)
-        elsif top == 0xfe then
-          return uint32.call(:read)
-        elsif top == 0xff then
-          return uint64.call(:read)
-        end
+    block_hash = self.method(:block_hash)
+    tx_hash    = self.method(:tx_hash)
 
-      when :write
-        if val < 0xfd then
-          uint8.call(:write, val)
-        elsif val <= 0xffff then
-          uint8.call(:write, 0xfd)
-          uint16.call(:write, val)
-        elsif val <= 0xffffffff then
-          uint8.call(:write, 0xfe)
-          uint32.call(:write, val)
-        else
-          uint8.call(:write, 0xff)
-          uint64.call(:write, val)
-        end
+    outpoint   = self.method(:outpoint)
+    tx_in      = self.method(:tx_in)
+    tx_out     = self.method(:tx_out)
 
-      end
-    end
-
-    string = lambda do |rw, val = nil|
-      case rw
-      when :read
-        len = integer.call(:read)
-        res = read_bytes.call(len)
-        return res
-      when :write
-        integer.call(:write, val.length)
-        write_bytes.call(val)
-      end
-    end
-
-    net_addr = lambda do |rw, val = nil|
-      # accurate serializing is not necessary
-      case rw
-      when :read
-        read_bytes.call(26)
-        return {}
-      when :write
-        write_bytes.call([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*v'))
-      end
-    end
-
-    relay_flag = lambda do |rw, val = nil|
-      case rw
-      when :read
-        if @r_payload.length > 0 then
-          return uint8.call(:read)
-        else
-          return true
-        end
-      when :write
-        unless val then
-          uint8.call(:write, 0)
-        end
-      end
-    end
-
-    array = lambda do |elm, rw, val = nil|
-      case rw
-      when :read
-        count = integer.call(:read)
-        res = []
-        count.times do
-          res.push elm.call(:read)
-        end
-        return res
-      when :write
-        integer.call(:write, val.length)
-        val.each do |v|
-          elm.call(:write, v)
-        end
-      end
-    end
-
-    hash256 = lambda do |rw, val = nil|
-      case rw
-      when :read
-        res = read_bytes.call(32)
-        return res
-      when :write
-        write_bytes.call(val)
-      end
-    end
-
-    inv_vect = lambda do |rw, val = nil|
-      case rw
-      when :read
-        type = uint32.call(:read)
-        hash = hash256.call(:read)
-        return {:type => type, :hash => hash}
-      when :write
-        uint32.call(:write, val[:type])
-        hash256.call(:write, val[:hash])
-      end
-    end
-
-    block_hash = lambda do |rw, val = nil|
-      case rw
-      when :read
-        return Key.hash256(@r_payload[0, 80])
-      end
-    end
-
-    tx_hash = lambda do |rw, val = nil|
-      case rw
-      when :read
-        return Key.hash256(@r_payload)
-      end
-    end
-
-    outpoint = lambda do |rw, val = nil|
-      case rw
-      when :read
-        hash = hash256.call(:read)
-        index = uint32.call(:read)
-        return { :hash => hash, :index => index }
-      when :write
-        hash256.call(:write, val[:hash])
-        uint32.call(:write, val[:index])
-      end
-    end
-
-    tx_in = lambda do |rw, val = nil|
-      case rw
-      when :read
-        previous_output = outpoint.call(:read)
-        signature_script = string.call(:read)
-        sequence = uint32.call(:read)
-        return { :previous_output => previous_output,
-                 :signature_script => signature_script, :sequence => sequence }
-      when :write
-        outpoint.call(:write, val[:previous_output])
-        string.call(:write, val[:signature_script])
-        uint32.call(:write, val[:sequence])
-      end
-    end
-
-    tx_out = lambda do |rw, val = nil|
-      case rw
-      when :read
-        value = uint64.call(:read)
-        pk_script = string.call(:read)
-        return { :value => value, :pk_script => pk_script }
-      when :write
-        uint64.call(:write, val[:value])
-        string.call(:write, val[:pk_script])
-      end
-    end
 
     return @message_defs = {
       :version => [
