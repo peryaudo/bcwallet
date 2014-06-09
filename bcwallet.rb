@@ -1172,84 +1172,65 @@ private
     return
   end
 
-public
-  def initialize(argv, keys_file_name, data_file_name)
-    @argv = argv
-    @keys_file_name = keys_file_name
-    @data_file_name = data_file_name
+  def generate(name)
+    return usage "the name \"#{name}\" already exists" if @keys.has_key?(name)
+
+    key = Key.new
+
+    open(@keys_file_name, 'a') do |file|
+      file.write "#{name} #{key.to_der_hex_s}\n"
+    end
+
+    puts "new Bitcoin address \"#{name}\" generated: #{key.to_address_s}"
+
+    return
   end
 
-  def run
-    return usage if @argv.length < 1
-
-    load_keys
-
-    case @argv.first
-    when 'generate'
-      return usage 'an address name required' if @argv.length < 2
-
-      name = @argv[1]
-      
-      return usage "the name \"#{name}\" already exists" if @keys.has_key?(name)
-
-      key = Key.new
-
-      open(@keys_file_name, 'a') do |file|
-        file.write "#{name} #{key.to_der_hex_s}\n"
-      end
-
-      puts "new Bitcoin address \"#{name}\" generated: #{key.to_address_s}"
-
+  def list
+    if @keys.empty? then
+      puts 'No addresses available'
       return
+    end
 
-    when 'list'
-      if @keys.empty? then
-        puts 'No addresses available'
-        return
-      end
+    puts 'List of available Bitcoin addresses: '
+    @keys.each do |name, key|
+      puts "    #{name}: #{key.to_address_s}"
+    end
 
-      puts 'List of available Bitcoin addresses: '
-      @keys.each do |name, key|
-        puts "    #{name}: #{key.to_address_s}"
-      end
+    return
+  end
 
-    when 'export'
-      return usage 'an address name required' if @argv.length < 2
+  def export(name)
+    return usage "an address named #{name} doesn't exist" unless @keys.has_key?(name)
 
-      name = @argv[1]
-      
-      return usage "an address named #{name} doesn't exist" unless @keys.has_key?(name)
+    STDERR.print "Are you sure you want to export private key for \"#{name}\"? (yes/no): "
 
-      STDERR.print "Are you sure you want to export private key for \"#{name}\"? (yes/no): "
-      
-      if STDIN.gets.chomp.downcase == 'yes' then
-        puts @keys[name].to_private_key_s
-      end
+    if STDIN.gets.chomp.downcase == 'yes' then
+      puts @keys[name].to_private_key_s
+    end
 
-      return
+    return
+  end
 
-    when 'balance'
-      STDERR.print "loading data ...\r"
-      @network = Network.new(@keys, @data_file_name)
+  def balance
+    STDERR.print "loading data ...\r"
+    @network = Network.new(@keys, @data_file_name)
 
-      @network.sync()
+    @network.sync()
 
-      wait_for_sync()
+    wait_for_sync()
 
-      puts 'Balances for available Bitcoin addresses: '
+    puts 'Balances for available Bitcoin addresses: '
 
-      balance = @network.get_balance()
-      balance.each do |addr, satoshi|
-        puts "    #{ addr }: #{ sprintf('%.8f', Rational(satoshi, 10**8)) } BTC"
-      end
+    balance = @network.get_balance()
+    balance.each do |addr, satoshi|
+      puts "    #{ addr }: #{ sprintf('%.8f', Rational(satoshi, 10**8)) } BTC"
+    end
 
-    when 'send'
-      return usage 'arguments required' if @argv.length < 4
+    return
+  end
 
-      name = @argv[1]
-      to = @argv[2]
-      amount = @argv[3].to_r * Rational(10 ** 8)
-
+  def send(name, to, amount)
       return usage "an address named #{name} doesn't exist" unless @keys.has_key?(name)
 
       @network = Network.new(@keys, @data_file_name)
@@ -1269,13 +1250,63 @@ public
       end
 
       return
+  end
+
+  def block(hash)
+      @network = Network.new(@keys, @data_file_name)
+      p @network.data[:blocks][[hash].pack('H*').reverse]
+
+      return
+  end
+
+public
+  def initialize(argv, keys_file_name, data_file_name)
+    @argv = argv
+    @keys_file_name = keys_file_name
+    @data_file_name = data_file_name
+  end
+
+  def run
+    return usage if @argv.length < 1
+
+    load_keys
+
+    case @argv.first
+    when 'generate'
+      return usage 'an address name required' if @argv.length < 2
+
+      name = @argv[1]
+
+      return generate(name)
+
+    when 'list'
+      list
+
+    when 'export'
+      return usage 'an address name required' if @argv.length < 2
+
+      name = @argv[1]
+
+      return export(name)
+
+    when 'balance'
+      return balace()
+
+    when 'send'
+      return usage 'arguments required' if @argv.length < 4
+
+      name = @argv[1]
+      to = @argv[2]
+      amount = @argv[3].to_r * Rational(10 ** 8)
+
+      return send(name, to, amount)
+
     when 'block'
       return usage 'arguments required' if @argv.length < 2
-      @network = Network.new(@keys, @data_file_name)
 
       hash = @argv[1]
 
-      p @network.data[:blocks][[hash].pack('H*').reverse]
+      return block(hash)
     else
       return usage 'invalid command'
     end
