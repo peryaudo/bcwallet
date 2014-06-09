@@ -52,7 +52,7 @@ require 'socket'
 # A class which manages both public key and private key in OpenSSL's ECDSA.
 #
 class Key
-public
+  public
 
   #
   # Bitcoin mainly uses SHA-256(SHA-256(plain)) as a cryptographic hash function
@@ -208,7 +208,7 @@ end
 # but may have false positives. (probabilistic data structure)
 #
 class BloomFilter
-public
+  public
   #
   # len = length of bloom filter
   # hash_funcs = number of hash functions to use 
@@ -295,7 +295,226 @@ end
 # However, since this is a extremely simplified implementation, they are integrated into this class.
 #
 class Network
-private
+  public
+
+  attr_reader :status, :data
+
+  # 
+  # keys = { name => ECDSA key objects }
+  #
+  def initialize(keys, data_file_name)
+    @keys = keys
+    @data_file_name = data_file_name
+
+    keys_hash = Key.hash256(keys.collect { |key, _| key }.sort.join)
+
+    @data = { :blocks => {}, :txs => {}, :last_height => 0, :keys_hash => keys_hash }
+    @is_sync_finished = true
+
+    load_data
+
+    if @data[:keys_hash] != keys_hash then
+      # new keys are added since the last synchronization
+      @data = { :blocks => {}, :txs => {}, :last_height => 0, :keys_hash => keys_hash }
+    end
+
+    # These hashes are genesis blocks'.
+    @last_hash = { :timestamp => 0,
+                   :hash => [IS_TESTNET ?
+                     '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943' :
+                     '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'].pack('H*').reverse }
+
+    @data[:blocks].each do |hash, block|
+      if block[:timestamp] > @last_hash[:timestamp] then
+        @last_hash = { :timestamp => block[:timestamp], :hash => hash }
+      end
+    end
+
+    @requested_data = 0
+    @received_data = 0
+  end
+
+  #
+  # Synchronize the block chain.
+  # It creates a new thread and returns immediately.
+  # To know whether the thread was finished, use Network#sync_finished?
+  #
+  def sync
+    Thread.abort_on_exception = true
+    @is_sync_finished = false
+    t = Thread.new do
+
+      unless @socket then
+        @status = 'connection establishing ... '
+
+        @socket = TCPSocket.open(HOST, IS_TESTNET ? 18333 : 8333)
+
+        send_version
+      end
+
+      if @created_transaction then
+        @status = 'announcing transaction ... '
+
+        send_transaction_inv
+      end
+
+      loop do
+        break if dispatch_message
+      end
+
+      @is_sync_finished = true
+    end
+    t.run
+  end
+
+  def sync_finished?
+    return @is_sync_finished
+  end
+
+  # 
+  # Send coins to the address.
+  # from_key = Key object which the client sends coins from
+  # to_addr  = Receiving address (string)
+  # transaction_fee = Transaction fee which miners receive
+  #
+  def send(from_key, to_addr, amount, transaction_fee = 0)
+    # The process of announcing a created transaction is as follows: 
+    #   Generate tx message and get its hash, and send inv message with the hash to the remote host.
+    #   Then the remote host will send getdata, so you can now actually send tx message.
+
+    to_addr_decoded = Key.decode_base58check(to_addr)
+
+    raise "invalid address" if to_addr_decoded[:type] != :public_key
+
+    public_key_hash = from_key.to_public_key_hash
+
+    set_spent_for_tx_outs
+
+    # In a real SPV client, we should walk along merkle trees to validate the transaction.
+    # It will be implemented to this client soon.
+    total_satoshis = 0
+    tx_in = []
+    @data[:txs].each do |tx_hash, tx|
+      break if total_satoshis >= amount
+
+      matched = nil
+      pk_script = nil
+
+      tx[:tx_out].each_with_index do |tx_out, index|
+        next if tx_out[:spent]
+
+        if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash then
+          total_satoshis += tx_out[:value]
+          matched = index
+          pk_script = tx_out[:pk_script]
+          break
+        end
+      end
+
+      if matched then
+        tx_in.push({ :previous_output => { :hash => tx[:hash], :index => matched },
+                     :signature_script => '',
+                     :sequence => ((1 << 32) - 1),
+
+                     # not included in serialized data, but used to make signature
+                     :pk_script => pk_script })
+      end
+    end
+
+    payback = total_satoshis - amount - transaction_fee
+
+    raise "you don't have enough balance to pay" unless payback >= 0
+
+    # pk_script field is constructed in Bitcoin's scripting system
+    #    https://en.bitcoin.it/wiki/Script
+    #
+    prefix = ['76a914'].pack('H*') # OP_DUP OP_HASH160 [length of the address]
+    postfix = ['88ac'].pack('H*')  # OP_EQUALVERIFY OP_CHECKSIG
+    
+    tx_out = [{ :value => amount,  :pk_script => (prefix + to_addr_decoded[:data] + postfix) },
+              { :value => payback, :pk_script => (prefix + public_key_hash + postfix) }]
+
+    @created_transaction = {
+      :command => :tx,
+
+      :version => 1,
+      :tx_in => tx_in,
+      :tx_out => tx_out,
+      :lock_time => 0
+    }
+
+    # We have generated all data without signatures, so we're now going to generate signatures.
+    # However, it is very complicated one.
+ 
+    signatures = []
+
+    tx_in.each_with_index do |tx_in_elm, i|
+      duplicated = @created_transaction.dup
+      duplicated[:tx_in] = duplicated[:tx_in].dup
+      duplicated[:tx_in][i] = duplicated[:tx_in][i].dup
+
+      # To generate signature, you need hash256 of the whole transaction in special form.
+      # The transaction in that form is different from usual one,
+      # because the signature_script field in the tx_in to sign is
+      # replaced with pk_script in previous tx_out,
+      # and other tx_ins' signature_scripts are empty.
+      # (make sure that var_int for the length is also set to zero)
+      #
+      # For better understanding, see: 
+      #   https://en.bitcoin.it/w/images/en/7/70/Bitcoin_OpCheckSig_InDetail.png
+      #
+
+      duplicated[:tx_in][i][:signature_script] = tx_in_elm[:pk_script]
+
+      serialize_message(duplicated)
+
+      # hash256 includes type code field (see the figure in the URL above)
+      verified_str = Key.hash256(@payload + [1].pack('V'))
+
+      signatures.push from_key.sign(verified_str)
+    end
+
+    # see the figure in the URL above
+    signatures.each_with_index do |signature, i|
+      @created_transaction[:tx_in][i][:signature_script] =
+        [signature.length + 1].pack('C') + signature + [1].pack('C') +
+        [from_key.to_public_key.length].pack('C') + from_key.to_public_key
+    end
+
+    @status = ''
+  end
+
+  #
+  # Get balance for the keys
+  #
+  def get_balance
+    balance = {}
+    @keys.each do |addr, _|
+      balance[addr] = 0
+    end
+
+    set_spent_for_tx_outs
+
+    @data[:txs].each do |tx_hash, tx|
+      @keys.each do |addr, key|
+        public_key_hash = key.to_public_key_hash
+
+        tx[:tx_out].each do |tx_out|
+          # The tx_out was already spent
+          next if tx_out[:spent]
+
+          if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash then
+            balance[addr] += tx_out[:value]
+          end
+        end
+      end
+    end
+
+    return balance
+  end
+
+  private
+
   PROTOCOL_VERSION = 70001
 
   def load_data
@@ -649,8 +868,6 @@ private
       # It forces the remote host not to send any 'inv' messages till it receive 'filterload' message.
       :relay     => false
     })
-
-    return
   end
 
   #
@@ -691,7 +908,7 @@ private
 
     # @data[:blocks].length includes block #0 while @data[:last_height] does not.
     if @data[:blocks].length > @data[:last_height] then
-      save_data()
+      save_data
       return true
     end
 
@@ -793,7 +1010,7 @@ private
   # Returns true if the whole process has been finished, otherwise false.
   #
   def dispatch_message
-    message = read_message()
+    message = read_message
 
     case message[:command]
     when :version
@@ -820,7 +1037,7 @@ private
       write_message({:command => :mempool})
 
       # Send getblocks on demand and return true
-      return true if send_getblocks()
+      return true if send_getblocks
 
     when :inv
       send_getdata message[:inventory]
@@ -839,20 +1056,20 @@ private
         @last_hash = { :timestamp => message[:timestamp], :hash => message[:hash] }
       end
 
-      return true if @requested_data <= @received_data && send_getblocks()
+      return true if @requested_data <= @received_data && send_getblocks
 
     when :tx
       @received_data += 1
 
       @data[:txs][message[:hash]] = message
 
-      return true if @requested_data <= @received_data && send_getblocks()
+      return true if @requested_data <= @received_data && send_getblocks
 
     when :getdata
       @status = 'sending transaction data ... '
 
       # Send the transaction you create
-      send_transaction()
+      send_transaction
       
       return true
     end
@@ -860,82 +1077,6 @@ private
     return false
   end
 
-public
-  attr_reader :status, :data
-
-  # 
-  # keys = { name => ECDSA key objects }
-  #
-  def initialize(keys, data_file_name)
-    @keys = keys
-    @data_file_name = data_file_name
-
-    keys_hash = Key.hash256(keys.collect { |key, _| key }.sort.join)
-
-    @data = { :blocks => {}, :txs => {}, :last_height => 0, :keys_hash => keys_hash }
-    @is_sync_finished = true
-
-    load_data
-
-    if @data[:keys_hash] != keys_hash then
-      # new keys are added since the last synchronization
-      @data = { :blocks => {}, :txs => {}, :last_height => 0, :keys_hash => keys_hash }
-    end
-
-    # These hashes are genesis blocks'.
-    @last_hash = { :timestamp => 0,
-                   :hash => [IS_TESTNET ?
-                     '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943' :
-                     '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'].pack('H*').reverse }
-
-    @data[:blocks].each do |hash, block|
-      if block[:timestamp] > @last_hash[:timestamp] then
-        @last_hash = { :timestamp => block[:timestamp], :hash => hash }
-      end
-    end
-
-    @requested_data = 0
-    @received_data = 0
-  end
-
-  #
-  # Synchronize the block chain.
-  # It creates a new thread and returns immediately.
-  # To know whether the thread was finished, use Network#sync_finished?
-  #
-  def sync
-    Thread.abort_on_exception = true
-    @is_sync_finished = false
-    t = Thread.new do
-
-      unless @socket then
-        @status = 'connection establishing ... '
-
-        @socket = TCPSocket.open(HOST, IS_TESTNET ? 18333 : 8333)
-
-        send_version()
-      end
-
-      if @created_transaction then
-        @status = 'announcing transaction ... '
-
-        send_transaction_inv()
-      end
-
-      loop do
-        break if dispatch_message()
-      end
-
-      @is_sync_finished = true
-    end
-    t.run
-  end
-
-  def sync_finished?
-    return @is_sync_finished
-  end
-
-private
   #
   # Set spent flags for all tx_outs.
   # If the tx_out is already spent on another transaction's tx_in, it will be set.
@@ -952,123 +1093,6 @@ private
     end
   end
 
-public
-  # 
-  # Send coins to the address.
-  # from_key = Key object which the client sends coins from
-  # to_addr  = Receiving address (string)
-  # transaction_fee = Transaction fee which miners receive
-  #
-  def send(from_key, to_addr, amount, transaction_fee = 0)
-    # The process of announcing a created transaction is as follows: 
-    #   Generate tx message and get its hash, and send inv message with the hash to the remote host.
-    #   Then the remote host will send getdata, so you can now actually send tx message.
-
-    to_addr_decoded = Key.decode_base58check(to_addr)
-
-    raise "invalid address" if to_addr_decoded[:type] != :public_key
-
-    public_key_hash = from_key.to_public_key_hash
-
-    set_spent_for_tx_outs()
-
-    # In a real SPV client, we should walk along merkle trees to validate the transaction.
-    # It will be implemented to this client soon.
-    total_satoshis = 0
-    tx_in = []
-    @data[:txs].each do |tx_hash, tx|
-      break if total_satoshis >= amount
-
-      matched = nil
-      pk_script = nil
-
-      tx[:tx_out].each_with_index do |tx_out, index|
-        next if tx_out[:spent]
-
-        if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash then
-          total_satoshis += tx_out[:value]
-          matched = index
-          pk_script = tx_out[:pk_script]
-          break
-        end
-      end
-
-      if matched then
-        tx_in.push({ :previous_output => { :hash => tx[:hash], :index => matched },
-                     :signature_script => '',
-                     :sequence => ((1 << 32) - 1),
-
-                     # not included in serialized data, but used to make signature
-                     :pk_script => pk_script })
-      end
-    end
-
-    payback = total_satoshis - amount - transaction_fee
-
-    raise "you don't have enough balance to pay" unless payback >= 0
-
-    # pk_script field is constructed in Bitcoin's scripting system
-    #    https://en.bitcoin.it/wiki/Script
-    #
-    prefix = ['76a914'].pack('H*') # OP_DUP OP_HASH160 [length of the address]
-    postfix = ['88ac'].pack('H*')  # OP_EQUALVERIFY OP_CHECKSIG
-    
-    tx_out = [{ :value => amount,  :pk_script => (prefix + to_addr_decoded[:data] + postfix) },
-              { :value => payback, :pk_script => (prefix + public_key_hash + postfix) }]
-
-    @created_transaction = {
-      :command => :tx,
-
-      :version => 1,
-      :tx_in => tx_in,
-      :tx_out => tx_out,
-      :lock_time => 0
-    }
-
-    # We have generated all data without signatures, so we're now going to generate signatures.
-    # However, it is very complicated one.
- 
-    signatures = []
-
-    tx_in.each_with_index do |tx_in_elm, i|
-      duplicated = @created_transaction.dup
-      duplicated[:tx_in] = duplicated[:tx_in].dup
-      duplicated[:tx_in][i] = duplicated[:tx_in][i].dup
-
-      # To generate signature, you need hash256 of the whole transaction in special form.
-      # The transaction in that form is different from usual one,
-      # because the signature_script field in the tx_in to sign is
-      # replaced with pk_script in previous tx_out,
-      # and other tx_ins' signature_scripts are empty.
-      # (make sure that var_int for the length is also set to zero)
-      #
-      # For better understanding, see: 
-      #   https://en.bitcoin.it/w/images/en/7/70/Bitcoin_OpCheckSig_InDetail.png
-      #
-
-      duplicated[:tx_in][i][:signature_script] = tx_in_elm[:pk_script]
-
-      serialize_message(duplicated)
-
-      # hash256 includes type code field (see the figure in the URL above)
-      verified_str = Key.hash256(@payload + [1].pack('V'))
-
-      signatures.push from_key.sign(verified_str)
-    end
-
-    # see the figure in the URL above
-    signatures.each_with_index do |signature, i|
-      @created_transaction[:tx_in][i][:signature_script] =
-        [signature.length + 1].pack('C') + signature + [1].pack('C') +
-        [from_key.to_public_key.length].pack('C') + from_key.to_public_key
-    end
-
-    @status = ''
-
-    return
-  end
-
-private
   #
   # Bitcoin has complex scripting system for its payment,
   # but we will only support very basic one.
@@ -1084,35 +1108,6 @@ private
     return script[3, 20]
   end
 
-public
-  #
-  # Get balance for the keys
-  #
-  def get_balance
-    balance = {}
-    @keys.each do |addr, _|
-      balance[addr] = 0
-    end
-
-    set_spent_for_tx_outs()
-
-    @data[:txs].each do |tx_hash, tx|
-      @keys.each do |addr, key|
-        public_key_hash = key.to_public_key_hash
-
-        tx[:tx_out].each do |tx_out|
-          # The tx_out was already spent
-          next if tx_out[:spent]
-
-          if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash then
-            balance[addr] += tx_out[:value]
-          end
-        end
-      end
-    end
-
-    return balance
-  end
 end
 
 
@@ -1120,7 +1115,8 @@ end
 # The class deals with command line arguments and the key file.
 #
 class BCWallet
-private
+  private
+
   def usage(error = nil)
     warn "bcwallet.rb: #{error}\n\n" if error
     warn "bcwallet.rb: Educational Bitcoin Client"
@@ -1179,8 +1175,6 @@ private
     else
       STDERR.print "Block chain synchronized.\n\n"
     end
-
-    return
   end
 
   def generate(name)
@@ -1193,8 +1187,6 @@ private
     end
 
     puts "new Bitcoin address \"#{name}\" generated: #{key.to_address_s}"
-
-    return
   end
 
   def list
@@ -1207,8 +1199,6 @@ private
     @keys.each do |name, key|
       puts "    #{name}: #{key.to_address_s}"
     end
-
-    return
   end
 
   def export(name)
@@ -1219,8 +1209,6 @@ private
     if STDIN.gets.chomp.downcase == 'yes' then
       puts @keys[name].to_private_key_s
     end
-
-    return
   end
 
   def balance
@@ -1231,12 +1219,10 @@ private
 
     puts 'Balances for available Bitcoin addresses: '
 
-    balance = @network.get_balance()
+    balance = @network.get_balance
     balance.each do |addr, satoshi|
       puts "    #{ addr }: #{ sprintf('%.8f', Rational(satoshi, 10**8)) } BTC"
     end
-
-    return
   end
 
   def send(name, to, amount)
@@ -1254,18 +1240,15 @@ private
 
       wait_for_sync
     end
-
-    return
   end
 
   def block(hash)
     init_network
     p @network.data[:blocks][[hash].pack('H*').reverse]
-
-    return
   end
 
-public
+  public
+
   def initialize(argv, keys_file_name, data_file_name)
     @argv = argv
     @keys_file_name = keys_file_name
@@ -1283,31 +1266,31 @@ public
       return if require_args(1)
 
       # name = @argv[1]
-      return generate(@argv[1])
+      generate(@argv[1])
 
     when 'list'
-      return list()
+      list
 
     when 'export'
       return if require_args(1)
 
       # name = @argv[1]
-      return export(@argv[1])
+      export(@argv[1])
 
     when 'balance'
-      return balace()
+      balace
 
     when 'send'
       return if require_args(3)
 
       # name = @argv[1], to = @argv[2], amount = @argv[3] (converted into satoshi)
-      return send(@argv[1], @argv[2], @argv[3].to_r * Rational(10 ** 8))
+      send(@argv[1], @argv[2], @argv[3].to_r * Rational(10 ** 8))
 
     when 'block'
       return if require_args(1)
 
       # hash = @argv[1]
-      return block(@argv[1])
+      block(@argv[1])
 
     else
       return usage 'invalid command'
