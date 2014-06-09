@@ -232,9 +232,9 @@ public
   end
 
   #
-  # The hash functions is called MurmurHash3.
+  # The hash functions is called MurmurHash3 (32-bit).
   # Reference implementation is somewhat tricky one, 
-  # so I prefer you read bitcoinj's one if you want to know the detail.
+  # so I recommend you to read bitcoinj's one if you want to know the detail.
   #
   def hash(seed, data)
     mask = 0xffffffff
@@ -243,34 +243,33 @@ public
     c1 = 0xcc9e2d51
     c2 = 0x1b873593
 
-    num_blocks = (data.length / 4).to_i
+    num_blocks = data.length >> 2
 
     num_blocks.times do |i|
       k1 = data[4 * i, 4].unpack('V').first
 
-      k1 = (k1 * c1) & mask; k1 = rotate_left_32(k1, 15); k1 = (k1 * c2) & mask
+      k1 = (k1 * c1) & mask
+      k1 = rotate_left_32(k1, 15)
+      k1 = (k1 * c2) & mask
 
-      h1 = (h1 ^ k1) & mask
+      h1 = h1 ^ k1
       h1 = rotate_left_32(h1, 13)
       h1 = (h1 * 5 + 0xe6546b64) & mask
     end
 
-    sw = data.length & 3
-
-    k1 = 0
-    if sw >= 3 then k1 = (k1 ^ (data[4 * num_blocks + 2].unpack('C').first << 16)) & mask end
-    if sw >= 2 then k1 = (k1 ^ (data[4 * num_blocks + 1].unpack('C').first << 8)) & mask end
-    if sw >= 1 then
-      k1 = (k1 ^ data[4 * num_blocks].unpack('C').first) & mask
-      k1 = (k1 * c1) & mask; k1 = rotate_left_32(k1, 15); k1 = (k1 * c2) & mask; h1 = (h1 ^ k1) & mask
-    end
+    # remaining bytes
+    k1 = (data[(num_blocks << 2)..-1] + "\0" * (4 - (data.length & 3))).unpack('V').first
+    k1 = (k1 * c1) & mask
+    k1 = rotate_left_32(k1, 15)
+    k1 = (k1 * c2) & mask
+    h1 = h1 ^ k1
 
     h1 = (h1 ^ data.length) & mask
-    h1 = (h1 ^ (h1 >> 16)) & mask
+    h1 = h1 ^ (h1 >> 16)
     h1 = (h1 * 0x85ebca6b) & mask
-    h1 = (h1 ^ (h1 >> 13)) & mask
+    h1 = h1 ^ (h1 >> 13)
     h1 = (h1 * 0xc2b2ae35) & mask
-    h1 = (h1 ^ (h1 >> 16)) & mask
+    h1 = h1 ^ (h1 >> 16)
 
     return h1
   end
