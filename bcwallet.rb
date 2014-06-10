@@ -453,34 +453,37 @@ class Message
     return fixed_integer('Q', 8, rw, val)
   end
 
+  def read_integer
+    top = uint8(:read)
+    case top
+    when 0xfd then uint16(:read)
+    when 0xfe then uint32(:read)
+    when 0xff then uint64(:read)
+    else top
+    end
+  end
+
+  def write_integer(val)
+    if val < 0xfd
+      uint8(:write, val)
+    elsif val <= 0xffff
+      uint8(:write, 0xfd)
+      uint16(:write, val)
+    elsif val <= 0xffffffff
+      uint8(:write, 0xfe)
+      uint32(:write, val)
+    else
+      uint8(:write, 0xff)
+      uint64(:write, val)
+    end
+  end
+
   def integer(rw, val = nil)
     case rw
     when :read
-      top = uint8(:read)
-
-      if top < 0xfd then
-        return top
-      elsif top == 0xfd then
-        return uint16(:read)
-      elsif top == 0xfe then
-        return uint32(:read)
-      elsif top == 0xff then
-        return uint64(:read)
-      end
-
+      read_integer
     when :write
-      if val < 0xfd then
-        uint8(:write, val)
-      elsif val <= 0xffff then
-        uint8(:write, 0xfd)
-        uint16(:write, val)
-      elsif val <= 0xffffffff then
-        uint8(:write, 0xfe)
-        uint32(:write, val)
-      else
-        uint8(:write, 0xff)
-        uint64(:write, val)
-      end
+      write_integer(val)
     end
   end
 
