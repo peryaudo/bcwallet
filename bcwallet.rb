@@ -102,7 +102,7 @@ class Key
 
     res = num.to_s(16)
 
-    if res % 2 == 1 then
+    if res % 2 == 1
       res = '0' + res
     end
 
@@ -121,8 +121,8 @@ class Key
   #
   def self.encode_base58check(type, plain)
     leading_bytes = {
-      :main    => { :public_key => 0,   :private_key => 128 },
-      :testnet => { :public_key => 111, :private_key => 239 }
+      main:    { public_key: 0,   private_key: 128 },
+      testnet: { public_key: 111, private_key: 239 }
     }
 
     leading_byte = [leading_bytes[IS_TESTNET ? :testnet : :main][type]].pack('C')
@@ -139,20 +139,20 @@ class Key
     raise "invalid base58 checksum" if Key.hash256(decoded[0, decoded.length - 4])[0, 4] != decoded[-4, 4]
 
     types = {
-      :main    => { 0   => :public_key, 128 => :private_key },
-      :testnet => { 111 => :public_key, 239 => :private_key }
+      main:    { 0   => :public_key, 128 => :private_key },
+      testnet: { 111 => :public_key, 239 => :private_key }
     }
 
     type = types[IS_TESTNET ? :testnet : :main][decoded[0].unpack('C').first]
 
-    return {:type => type, :data => decoded[1, decoded.length - 5]}
+    return { type: type, data: decoded[1, decoded.length - 5] }
   end
 
   #
   # Initialize with ASCII-encoded DER format string (nil to generate a new key)
   #
   def initialize(der = nil)
-    if der then
+    if der
       @key = OpenSSL::PKey::EC.new([der].pack('H*'))
     else
       @key = OpenSSL::PKey::EC.new('secp256k1')
@@ -305,7 +305,7 @@ class Message
     # Message definitions.
     #
     @message_definitions = {
-      :version => [
+      version: [
         [:version,   method(:uint32)],
         [:services,  method(:uint64)],
         [:timestamp, method(:uint64)],
@@ -316,11 +316,11 @@ class Message
         [:height,    method(:uint32)],
         [:relay,     method(:relay_flag)]
       ],
-      :verack => [],
-      :mempool => [],
-      :addr => [[:addr, array_for(method(:net_addr))]],
-      :inv  => [[:inventory,  array_for(method(:inv_vect))]],
-      :merkleblock => [
+      verack:  [],
+      mempool: [],
+      addr:    [[:addr, array_for(method(:net_addr))]],
+      inv:     [[:inventory,  array_for(method(:inv_vect))]],
+      merkleblock: [
         [:hash,        method(:block_hash)],
         [:version,     method(:uint32)],
         [:prev_block,  method(:hash256)],
@@ -332,25 +332,25 @@ class Message
         [:hashes,      array_for(method(:hash256))],
         [:flags,       method(:string)]
       ],
-      :tx => [
+      tx: [
         [:hash,      method(:tx_hash)],
         [:version,   method(:uint32)],
         [:tx_in,     array_for(method(:tx_in))],
         [:tx_out,    array_for(method(:tx_out))],
         [:lock_time, method(:uint32)]
       ],
-      :filterload => [
+      filterload: [
         [:filter,     method(:string)],
         [:hash_funcs, method(:uint32)],
         [:tweak,      method(:uint32)],
         [:flag,       method(:uint8)]
       ],
-      :getblocks => [
+      getblocks: [
         [:version,       method(:uint32)],
         [:block_locator, array_for(method(:hash256))],
         [:hash_stop,     method(:hash256)]
       ],
-      :getdata => [[:inventory, array_for(method(:inv_vect))]]
+      getdata: [[:inventory, array_for(method(:inv_vect))]]
     }
   end
 
@@ -377,7 +377,7 @@ class Message
   def deserialize(command, payload)
     raise unless is_defined?(command)
 
-    res = { :command => command }
+    res = { command: command }
 
     @payload = payload
 
@@ -514,13 +514,13 @@ class Message
   def relay_flag(rw, val = nil)
     case rw
     when :read
-      if @payload.length > 0 then
+      if @payload.length > 0
         return uint8(:read)
       else
         return true
       end
     when :write
-      unless val then
+      unless val
         uint8(:write, 0)
       end
       return val
@@ -540,7 +540,7 @@ class Message
 
   def inv_vect(rw, val = nil)
     val ||= {}
-    return { :type => uint32(rw, val[:type]), :hash => hash256(rw, val[:hash]) }
+    return { type: uint32(rw, val[:type]), hash: hash256(rw, val[:hash]) }
   end
 
   def block_hash(rw, val = nil)
@@ -559,19 +559,19 @@ class Message
 
   def outpoint(rw, val = nil)
     val ||= {}
-    return { :hash => hash256(rw, val[:hash]), :index => uint32(rw, val[:index]) }
+    return { hash: hash256(rw, val[:hash]), index: uint32(rw, val[:index]) }
   end
 
   def tx_in(rw, val = nil)
     val ||= {}
-    return { :previous_output  => outpoint(rw, val[:previous_output]),
-             :signature_script => string(rw, val[:signature_script]),
-             :sequence         => uint32(rw, val[:sequence]) }
+    return { previous_output:  outpoint(rw, val[:previous_output]),
+             signature_script: string(rw, val[:signature_script]),
+             sequence:         uint32(rw, val[:sequence]) }
   end
 
   def tx_out(rw, val = nil)
     val ||= {}
-    return { :value => uint64(rw, val[:value]), :pk_script => string(rw, val[:pk_script]) }
+    return { value: uint64(rw, val[:value]), pk_script: string(rw, val[:pk_script]) }
   end
 
 end
@@ -595,25 +595,25 @@ class Network
 
     keys_hash = Key.hash256(keys.collect { |key, _| key }.sort.join)
 
-    @data = { :blocks => {}, :txs => {}, :last_height => 0, :keys_hash => keys_hash }
+    @data = { blocks: {}, txs: {}, last_height: 0, keys_hash: keys_hash }
     @is_sync_finished = true
 
     load_data
 
-    if @data[:keys_hash] != keys_hash then
+    if @data[:keys_hash] != keys_hash
       # new keys are added since the last synchronization
-      @data = { :blocks => {}, :txs => {}, :last_height => 0, :keys_hash => keys_hash }
+      @data = { blocks: {}, txs: {}, last_height: 0, keys_hash: keys_hash }
     end
 
     # These hashes are genesis blocks'.
-    @last_hash = { :timestamp => 0,
-                   :hash => [IS_TESTNET ?
+    @last_hash = { timestamp: 0,
+                   hash: [IS_TESTNET ?
                      '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943' :
                      '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'].pack('H*').reverse }
 
     @data[:blocks].each do |hash, block|
-      if block[:timestamp] > @last_hash[:timestamp] then
-        @last_hash = { :timestamp => block[:timestamp], :hash => hash }
+      if block[:timestamp] > @last_hash[:timestamp]
+        @last_hash = { timestamp: block[:timestamp], hash: hash }
       end
     end
 
@@ -631,7 +631,7 @@ class Network
     @is_sync_finished = false
     t = Thread.new do
 
-      unless @socket then
+      unless @socket
         @status = 'connection establishing ... '
 
         @socket = TCPSocket.open(HOST, IS_TESTNET ? 18333 : 8333)
@@ -639,7 +639,7 @@ class Network
         send_version
       end
 
-      if @created_transaction then
+      if @created_transaction
         @status = 'announcing transaction ... '
 
         send_transaction_inv
@@ -675,6 +675,7 @@ class Network
 
     public_key_hash = from_key.to_public_key_hash
 
+    # refresh spent flags of tx_outs
     set_spent_for_tx_outs
 
     # In a real SPV client, we should walk along merkle trees to validate the transaction.
@@ -690,7 +691,7 @@ class Network
       tx[:tx_out].each_with_index do |tx_out, index|
         next if tx_out[:spent]
 
-        if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash then
+        if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash
           total_satoshis += tx_out[:value]
           matched = index
           pk_script = tx_out[:pk_script]
@@ -698,13 +699,13 @@ class Network
         end
       end
 
-      if matched then
-        tx_in.push({ :previous_output => { :hash => tx[:hash], :index => matched },
-                     :signature_script => '',
-                     :sequence => ((1 << 32) - 1),
+      if matched
+        tx_in.push({ previous_output:  { :hash => tx[:hash], :index => matched },
+                     signature_script: '',
+                     sequence:         ((1 << 32) - 1),
 
                      # not included in serialized data, but used to make signature
-                     :pk_script => pk_script })
+                     pk_script: pk_script })
       end
     end
 
@@ -718,16 +719,16 @@ class Network
     prefix = ['76a914'].pack('H*') # OP_DUP OP_HASH160 [length of the address]
     postfix = ['88ac'].pack('H*')  # OP_EQUALVERIFY OP_CHECKSIG
     
-    tx_out = [{ :value => amount,  :pk_script => (prefix + to_addr_decoded[:data] + postfix) },
-              { :value => payback, :pk_script => (prefix + public_key_hash + postfix) }]
+    tx_out = [{ value: amount,  pk_script: (prefix + to_addr_decoded[:data] + postfix) },
+              { value: payback, pk_script: (prefix + public_key_hash + postfix) }]
 
     @created_transaction = {
-      :command => :tx,
+      command: :tx,
 
-      :version => 1,
-      :tx_in => tx_in,
-      :tx_out => tx_out,
-      :lock_time => 0
+      version: 1,
+      tx_in: tx_in,
+      tx_out: tx_out,
+      lock_time: 0
     }
 
     # We have generated all data without signatures, so we're now going to generate signatures.
@@ -790,7 +791,7 @@ class Network
           # The tx_out was already spent
           next if tx_out[:spent]
 
-          if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash then
+          if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash
             balance[addr] += tx_out[:value]
           end
         end
@@ -869,25 +870,25 @@ class Network
   #
   def send_version
     write_message({
-      :command => :version,
+      command: :version,
 
-      :version   => PROTOCOL_VERSION,
+      version:   PROTOCOL_VERSION,
 
       # This client should not be asked for full blocks.
-      :services  => 0,
+      services:  0,
 
-      :timestamp => Time.now.to_i,
+      timestamp: Time.now.to_i,
 
-      :your_addr => nil, # I found that at least Satoshi client doesn't check it,
-      :my_addr   => nil, # so it will be enough for this client.
+      your_addr: nil, # I found that at least Satoshi client doesn't check it,
+      my_addr:   nil, # so it will be enough for this client.
       
-      :nonce     => (rand(1 << 64) - 1), # A random number.
+      nonce:     (rand(1 << 64) - 1), # A random number.
 
-      :agent     => '/bcwallet.rb:1.00/',
-      :height    => (@data[:blocks].length - 1), # Height of possessed blocks
+      agent:     '/bcwallet.rb:1.00/',
+      height:    (@data[:blocks].length - 1), # Height of possessed blocks
 
       # It forces the remote host not to send any 'inv' messages till it receive 'filterload' message.
-      :relay     => false
+      relay:     false
     })
   end
 
@@ -906,14 +907,14 @@ class Network
     end
 
     write_message({
-      :command => :filterload,
+      command: :filterload,
 
-      :filter     => bf.to_s,
-      :hash_funcs => hash_funcs,
-      :tweak      => tweak,
+      filter:     bf.to_s,
+      hash_funcs: hash_funcs,
+      tweak:      tweak,
 
       # BLOOM_UPDATE_ALL, updates Bloom filter automatically when the client has found matching transactions.
-      :flag       => 1
+      flag:       1
     })
   end
 
@@ -928,21 +929,21 @@ class Network
       "| #{(@data[:blocks].length - 1)} / #{@data[:last_height]} "
 
     # @data[:blocks].length includes block #0 while @data[:last_height] does not.
-    if @data[:blocks].length > @data[:last_height] then
+    if @data[:blocks].length > @data[:last_height]
       save_data
       return true
     end
 
-    if @data[:blocks].empty? then
-      send_getdata([{:type => Message::MSG_FILTERED_BLOCK, :hash => @last_hash[:hash]}])
+    if @data[:blocks].empty?
+      send_getdata([{type: Message::MSG_FILTERED_BLOCK, hash: @last_hash[:hash]}])
     end
 
     write_message({
-      :command => :getblocks,
+      command: :getblocks,
 
-      :version => PROTOCOL_VERSION,
-      :block_locator => [@last_hash[:hash]],
-      :hash_stop => ['00' * 32].pack('H*')
+      version: PROTOCOL_VERSION,
+      block_locator: [@last_hash[:hash]],
+      hash_stop: ['00' * 32].pack('H*')
     })
 
     return false
@@ -953,12 +954,12 @@ class Network
   #
   def send_getdata(inventory)
     write_message({
-      :command => :getdata,
+      command: :getdata,
 
-      :inventory => inventory.collect do |elm|
+      inventory: inventory.collect do |elm|
         # receive merkleblock instead of usual block
-        {:type => (elm[:type] == Message::MSG_BLOCK ? Message::MSG_FILTERED_BLOCK : elm[:type]),
-         :hash => elm[:hash]}
+        {type: (elm[:type] == Message::MSG_BLOCK ? Message::MSG_FILTERED_BLOCK : elm[:type]),
+         hash: elm[:hash]}
       end
     })
 
@@ -974,8 +975,8 @@ class Network
     @created_transaction[:hash] = Key.hash256(payload)
     
     write_message({
-      :command => :inv,
-      :inventory => [{:type => Message::MSG_TX, :hash => @created_transaction[:hash]}]
+      command: :inv,
+      inventory: [{type: Message::MSG_TX, hash: @created_transaction[:hash]}]
     })
   end
 
@@ -1046,7 +1047,7 @@ class Network
       @data[:last_height] = message[:height]
       save_data
 
-      write_message({:command => :verack})
+      write_message({command: :verack})
 
     when :verack
       # Handshake finished, so you can do anything you want.
@@ -1055,7 +1056,7 @@ class Network
       send_filterload
 
       # Tell the remote host to send transactions (inv) it has in its memory pool.
-      write_message({:command => :mempool})
+      write_message({command: :mempool})
 
       # Send getblocks on demand and return true
       return true if send_getblocks
@@ -1073,8 +1074,8 @@ class Network
 
       # Described in is_young_block().
       # It supposes that blocks are sent in its height order. Don't try this at real code.
-      unless is_young_block(message[:hash]) then
-        @last_hash = { :timestamp => message[:timestamp], :hash => message[:hash] }
+      unless is_young_block(message[:hash])
+        @last_hash = { timestamp: message[:timestamp], hash: message[:hash] }
       end
 
       return true if @requested_data <= @received_data && send_getblocks
@@ -1107,7 +1108,7 @@ class Network
       tx[:tx_in].each do |tx_in|
         hash = tx_in[:previous_output][:hash]
         index = tx_in[:previous_output][:index]
-        if @data[:txs].has_key?(hash) then
+        if @data[:txs].has_key?(hash)
           @data[:txs][hash][:tx_out][index][:spent] = true
         end
       end
@@ -1122,7 +1123,7 @@ class Network
     # OP_DUP OP_HASH160 (public key hash) OP_EQUALVERIFY OP_CHECKSIG
     unless script[0, 3]  == ['76a914'].pack('H*') &&
            script[23, 2] == ['88ac'].pack('H*') &&
-           script.length == 25 then
+           script.length == 25
       raise 'unsupported script format' 
     end
 
@@ -1199,7 +1200,7 @@ class BCWallet
   end
 
   def require_args(number)
-    if @argv.length < number + 1 then
+    if @argv.length < number + 1
       usage 'missing arguments'
       return true
     else
@@ -1239,7 +1240,7 @@ class BCWallet
     end
 
     STDERR.print "#{@network.status}done.\n"
-    if mode == :tx then
+    if mode == :tx
       STDERR.print "Transaction sent.\n\n"
     else
       STDERR.print "Block chain synchronized.\n\n"
@@ -1259,7 +1260,7 @@ class BCWallet
   end
 
   def list
-    if @keys.empty? then
+    if @keys.empty?
       puts 'No addresses available'
       return
     end
@@ -1275,7 +1276,7 @@ class BCWallet
 
     STDERR.print "Are you sure you want to export private key for \"#{name}\"? (yes/no): "
 
-    if STDIN.gets.chomp.downcase == 'yes' then
+    if STDIN.gets.chomp.downcase == 'yes'
       puts @keys[name].to_private_key_s
     end
   end
@@ -1304,7 +1305,7 @@ class BCWallet
     STDERR.print "    #{sprintf('%.8f', amount * Rational(1, 10**8))} BTC\n"
     STDERR.print "from\n    \"#{name}\"\nto\n    \"#{to}\"\n? (yes/no): "
 
-    if STDIN.gets.chomp.downcase == 'yes' then
+    if STDIN.gets.chomp.downcase == 'yes'
       @network.send(@keys[name], to, amount)
 
       wait_for_sync
@@ -1317,7 +1318,7 @@ class BCWallet
   end
 end
 
-if caller.length == 0 then
+if caller.length == 0
   unless IS_TESTNET
     warn 'WARNING: RUNNING UNDER MAIN NETWORK MODE'
   end
