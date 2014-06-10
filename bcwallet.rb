@@ -1147,41 +1147,27 @@ class BCWallet
   def run
     return usage if @argv.length < 1
 
+    # check argument numbers
+    case @argv.first
+    when 'generate' then return if require_args(1)
+    when 'list'     then return if require_args(0)
+    when 'export'   then return if require_args(1)
+    when 'balance'  then return if require_args(0)
+    when 'send'     then return if require_args(3)
+    when 'block'    then return if require_args(1)
+    else
+      return usage 'invalid command'
+    end
+
     load_keys
 
     case @argv.first
-    when 'generate'
-      return if require_args(1)
-
-      # name = @argv[1]
-      generate(@argv[1])
-
-    when 'list'
-      list
-
-    when 'export'
-      return if require_args(1)
-
-      # name = @argv[1]
-      export(@argv[1])
-
-    when 'balance'
-      balance
-
-    when 'send'
-      return if require_args(3)
-
-      # name = @argv[1], to = @argv[2], amount = @argv[3] (converted into satoshi)
-      send(@argv[1], @argv[2], @argv[3].to_r * Rational(10 ** 8))
-
-    when 'block'
-      return if require_args(1)
-
-      # hash = @argv[1]
-      block(@argv[1])
-
-    else
-      return usage 'invalid command'
+    when 'generate' then generate(@argv[1]) # name
+    when 'list'     then list
+    when 'export'   then export(@argv[1]) # name
+    when 'balance'  then balance
+    when 'send'     then send(@argv[1], @argv[2], btc_to_satoshi(@argv[3].to_r)) # name, to, amount
+    when 'block'    then block(@argv[1]) # hash
     end
   end
 
@@ -1247,6 +1233,14 @@ class BCWallet
     end
   end
 
+  def btc_to_satoshi(btc)
+    btc * Rational(10 ** 8)
+  end
+
+  def satoshi_to_btc(satoshi)
+    Rational(satoshi, 10**8)
+  end
+
   def generate(name)
     return usage "the name \"#{name}\" already exists" if @keys.has_key?(name)
 
@@ -1291,8 +1285,16 @@ class BCWallet
 
     balance = @network.get_balance
     balance.each do |addr, satoshi|
-      puts "    #{ addr }: #{ sprintf('%.8f', Rational(satoshi, 10**8)) } BTC"
+      puts "    #{ addr }: #{ sprintf('%.8f', satoshi_to_btc(satoshi)) } BTC"
     end
+  end
+
+  def confirm_send(name, to, amount)
+    STDERR.print "Are you sure you want to send\n"
+    STDERR.print "    #{sprintf('%.8f', satoshi_to_btc(amount))} BTC\n"
+    STDERR.print "from\n    \"#{name}\"\nto\n    \"#{to}\"\n? (yes/no): "
+
+    STDIN.gets.chomp.downcase == 'yes'
   end
 
   def send(name, to, amount)
@@ -1301,13 +1303,8 @@ class BCWallet
     init_network
     wait_for_sync
 
-    STDERR.print "Are you sure you want to send\n"
-    STDERR.print "    #{sprintf('%.8f', amount * Rational(1, 10**8))} BTC\n"
-    STDERR.print "from\n    \"#{name}\"\nto\n    \"#{to}\"\n? (yes/no): "
-
-    if STDIN.gets.chomp.downcase == 'yes'
+    if confirm_send(name, to, amount)
       @network.send(@keys[name], to, amount)
-
       wait_for_sync
     end
   end
