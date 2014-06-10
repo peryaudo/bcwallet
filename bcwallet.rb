@@ -732,35 +732,39 @@ class Network
     end
   end
 
-  def inv_vect(rw, val = {})
+  def inv_vect(rw, val = nil)
+    val ||= {}
     return { :type => uint32(rw, val[:type]), :hash => hash256(rw, val[:hash]) }
   end
 
-  def block_hash(rw, val = {})
+  def block_hash(rw, val = nil)
     case rw
     when :read
       return Key.hash256(@r_payload[0, 80])
     end
   end
 
-  def tx_hash(rw, val = {})
+  def tx_hash(rw, val = nil)
     case rw
     when :read
       return Key.hash256(@r_payload)
     end
   end
 
-  def outpoint(rw, val = {})
+  def outpoint(rw, val = nil)
+    val ||= {}
     return { :hash => hash256(rw, val[:hash]), :index => uint32(rw, val[:index]) }
   end
 
-  def tx_in(rw, val = {})
+  def tx_in(rw, val = nil)
+    val ||= {}
     return { :previous_output  => outpoint(rw, val[:previous_output]),
              :signature_script => string(rw, val[:signature_script]),
              :sequence         => uint32(rw, val[:sequence]) }
   end
 
-  def tx_out(rw, val = {})
+  def tx_out(rw, val = nil)
+    val ||= {}
     return { :value => uint64(rw, val[:value]), :pk_script => string(rw, val[:pk_script]) }
   end
 
