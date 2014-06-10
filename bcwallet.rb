@@ -57,14 +57,14 @@ class Key
   # when a hash is needed.
   #
   def self.hash256(plain)
-    return OpenSSL::Digest::SHA256.digest(OpenSSL::Digest::SHA256.digest(plain))
+    OpenSSL::Digest::SHA256.digest(OpenSSL::Digest::SHA256.digest(plain))
   end
 
   #
   # RIPEMD-160(SHA-256(plain)) is used when a shorter hash is preferable.
   #
   def self.hash160(plain)
-    return OpenSSL::Digest::RIPEMD160.digest(OpenSSL::Digest::SHA256.digest(plain))
+    OpenSSL::Digest::RIPEMD160.digest(OpenSSL::Digest::SHA256.digest(plain))
   end
 
   BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -90,7 +90,7 @@ class Key
       res += BASE58[0]
     end
 
-    return res.reverse
+    res.reverse
   end
 
   def self.decode_base58(encoded)
@@ -112,7 +112,7 @@ class Key
       res += '00'
     end
 
-    return [res].pack('H*')
+    [res].pack('H*')
   end
 
   #
@@ -130,7 +130,7 @@ class Key
     data = leading_byte + plain
     checksum = Key.hash256(data)[0, 4]
 
-    return Key.encode_base58(data + checksum)
+    Key.encode_base58(data + checksum)
   end
 
   def self.decode_base58check(encoded)
@@ -145,7 +145,7 @@ class Key
 
     type = types[IS_TESTNET ? :testnet : :main][decoded[0].unpack('C').first]
 
-    return { type: type, data: decoded[1, decoded.length - 5] }
+    { type: type, data: decoded[1, decoded.length - 5] }
   end
 
   #
@@ -166,36 +166,36 @@ class Key
   # Sign the data with the key.
   #
   def sign(data)
-    return @key.dsa_sign_asn1(data)
+    @key.dsa_sign_asn1(data)
   end
 
   #
   # Convert public key to Bitcoin address.
   #
   def to_address_s
-    return Key.encode_base58check(:public_key, Key.hash160(@key.public_key.to_bn.to_s(2)))
+    Key.encode_base58check(:public_key, Key.hash160(@key.public_key.to_bn.to_s(2)))
   end
 
   # 
   # Convert the private key to Bitcoin private key import format.
   #
   def to_private_key_s
-    return Key.encode_base58check(:private_key, @key.private_key.to_s(2))
+    Key.encode_base58check(:private_key, @key.private_key.to_s(2))
   end
 
   #
   # Convert the key pair into ASCII-encoded DER format string.
   #
   def to_der_hex_s
-    return @key.to_der.unpack('H*').first
+    @key.to_der.unpack('H*').first
   end
 
   def to_public_key
-    return @key.public_key.to_bn.to_s(2)
+    @key.public_key.to_bn.to_s(2)
   end
 
   def to_public_key_hash
-    return Key.hash160(@key.public_key.to_bn.to_s(2))
+    Key.hash160(@key.public_key.to_bn.to_s(2))
   end
 end
 
@@ -226,7 +226,7 @@ class BloomFilter
   end
 
   def rotate_left_32(x, r)
-    return ((x << r) | (x >> (32 - r))) & 0xffffffff
+    ((x << r) | (x >> (32 - r))) & 0xffffffff
   end
 
   #
@@ -266,7 +266,7 @@ class BloomFilter
     h1 = (h1 * 0xc2b2ae35) & mask
     h1 = h1 ^ (h1 >> 16)
 
-    return h1
+    h1
   end
 
   #
@@ -283,7 +283,7 @@ class BloomFilter
     @filter.each do |byte|
       res += [byte].pack('C')
     end
-    return res
+    res
   end
 end
 
@@ -355,7 +355,7 @@ class Message
   end
 
   def is_defined?(message)
-    return @message_definitions.has_key?(message)
+    @message_definitions.has_key?(message)
   end
 
   #
@@ -368,7 +368,7 @@ class Message
       message_definition.last.call(:write, message[message_definition.first])
     end
 
-    return @payload
+    @payload
   end
 
   #
@@ -385,7 +385,7 @@ class Message
       res[message_definition.first] = message_definition.last.call(:read)
     end
 
-    return res
+    res
   end
 
   private
@@ -394,7 +394,7 @@ class Message
   # Higher order function to generate array serializer / deserializer
   #
   def array_for(elm)
-    return lambda do |rw, val = nil|
+    lambda do |rw, val = nil|
       case rw
       when :read
         count = integer(:read)
@@ -402,13 +402,13 @@ class Message
         count.times do
           res.push elm.call(:read)
         end
-        return res
+        res
       when :write
         integer(:write, val.length)
         val.each do |v|
           elm.call(:write, v)
         end
-        return val
+        val
       end
     end
   end
@@ -420,7 +420,7 @@ class Message
   def read_bytes(len)
     res = @payload[0, len]
     @payload = @payload[len..-1]
-    return res
+    res
   end
 
   def write_bytes(val)
@@ -430,27 +430,26 @@ class Message
   def fixed_integer(templ, len, rw, val = nil)
     case rw
     when :read 
-      res = read_bytes(len).unpack(templ).first
-      return res
+      read_bytes(len).unpack(templ).first
     when :write
       write_bytes([val].pack(templ))
     end
   end
 
   def uint8(rw, val = nil)
-    return fixed_integer('C', 1, rw, val)
+    fixed_integer('C', 1, rw, val)
   end
 
   def uint16(rw, val = nil)
-    return fixed_integer('v', 2, rw, val)
+    fixed_integer('v', 2, rw, val)
   end
 
   def uint32(rw, val = nil)
-    return fixed_integer('V', 4, rw, val)
+    fixed_integer('V', 4, rw, val)
   end
 
   def uint64(rw, val = nil)
-    return fixed_integer('Q', 8, rw, val)
+    fixed_integer('Q', 8, rw, val)
   end
 
   def read_integer
@@ -491,11 +490,11 @@ class Message
     case rw
     when :read
       len = integer(:read)
-      return read_bytes(len)
+      read_bytes(len)
     when :write
       integer(:write, val.length)
       write_bytes(val)
-      return val
+      val
     end
   end
 
@@ -504,10 +503,10 @@ class Message
     case rw
     when :read
       read_bytes(26)
-      return {}
+      {}
     when :write
       write_bytes([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*v'))
-      return val
+      val
     end
   end
 
@@ -515,63 +514,62 @@ class Message
     case rw
     when :read
       if @payload.length > 0
-        return uint8(:read)
+        uint8(:read)
       else
-        return true
+        true
       end
     when :write
       unless val
         uint8(:write, 0)
       end
-      return val
+      val
     end
   end
 
   def hash256(rw, val = nil)
     case rw
     when :read
-      res = read_bytes(32)
-      return res
+      read_bytes(32)
     when :write
       write_bytes(val)
-      return val
+      val
     end
   end
 
   def inv_vect(rw, val = nil)
     val ||= {}
-    return { type: uint32(rw, val[:type]), hash: hash256(rw, val[:hash]) }
+    { type: uint32(rw, val[:type]), hash: hash256(rw, val[:hash]) }
   end
 
   def block_hash(rw, val = nil)
     case rw
     when :read
-      return Key.hash256(@payload[0, 80])
+      Key.hash256(@payload[0, 80])
     end
   end
 
   def tx_hash(rw, val = nil)
     case rw
     when :read
-      return Key.hash256(@payload)
+      Key.hash256(@payload)
     end
   end
 
   def outpoint(rw, val = nil)
     val ||= {}
-    return { hash: hash256(rw, val[:hash]), index: uint32(rw, val[:index]) }
+    { hash: hash256(rw, val[:hash]), index: uint32(rw, val[:index]) }
   end
 
   def tx_in(rw, val = nil)
     val ||= {}
-    return { previous_output:  outpoint(rw, val[:previous_output]),
-             signature_script: string(rw, val[:signature_script]),
-             sequence:         uint32(rw, val[:sequence]) }
+    { previous_output:  outpoint(rw, val[:previous_output]),
+      signature_script: string(rw, val[:signature_script]),
+      sequence:         uint32(rw, val[:sequence]) }
   end
 
   def tx_out(rw, val = nil)
     val ||= {}
-    return { value: uint64(rw, val[:value]), pk_script: string(rw, val[:pk_script]) }
+    { value: uint64(rw, val[:value]), pk_script: string(rw, val[:pk_script]) }
   end
 
 end
@@ -655,7 +653,7 @@ class Network
   end
 
   def sync_finished?
-    return @is_sync_finished
+    @is_sync_finished
   end
 
   # 
@@ -798,7 +796,7 @@ class Network
       end
     end
 
-    return balance
+    balance
   end
 
   private
@@ -836,7 +834,7 @@ class Network
 
     raise "unknown message #{command}" unless @message.is_defined?(command)
 
-    return @message.deserialize(command, payload)
+    @message.deserialize(command, payload)
   end
 
   #
@@ -946,7 +944,7 @@ class Network
       hash_stop: ['00' * 32].pack('H*')
     })
 
-    return false
+    false
   end
 
   #
@@ -962,8 +960,6 @@ class Network
          hash: elm[:hash]}
       end
     })
-
-    return
   end
 
   #
@@ -1006,7 +1002,7 @@ class Network
       hash = @data[:blocks][hash][:prev_block]
       cur += 1
     end
-    return cur == threshold
+    cur == threshold
   end
 
   #
@@ -1021,7 +1017,7 @@ class Network
   # doing it in Ruby is painful and also it's not ciritical to explain how Bitcoin client works.
   #
   def is_young_block(hash)
-    return (@data[:blocks][hash][:timestamp] - Time.now.to_i).abs <= 60 * 60 && !is_too_high(hash)
+    (@data[:blocks][hash][:timestamp] - Time.now.to_i).abs <= 60 * 60 && !is_too_high(hash)
   end
 
   #
@@ -1127,7 +1123,7 @@ class Network
       raise 'unsupported script format' 
     end
 
-    return script[3, 20]
+    script[3, 20]
   end
 
 end
@@ -1188,9 +1184,9 @@ class BCWallet
   def require_args(number)
     if @argv.length < number + 1
       usage 'missing arguments'
-      return true
+      true
     else
-      return false
+      false
     end
   end
 
