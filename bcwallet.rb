@@ -52,8 +52,6 @@ require 'socket'
 # A class which manages both public key and private key in OpenSSL's ECDSA.
 #
 class Key
-  public
-
   #
   # Bitcoin mainly uses SHA-256(SHA-256(plain)) as a cryptographic hash function
   # when a hash is needed.
@@ -290,19 +288,305 @@ class BloomFilter
 end
 
 #
+# A class for message serializers and deserializers.
+# It contains type definitions of structures.
+#
+class Message
+  #
+  # Constants used in inventory vector
+  #
+  MSG_TX = 1
+  MSG_BLOCK = 2
+  MSG_FILTERED_BLOCK = 3
+
+
+  def initialize
+    #
+    # Message definitions.
+    #
+    @message_definitions = {
+      :version => [
+        [:version,   method(:uint32)],
+        [:services,  method(:uint64)],
+        [:timestamp, method(:uint64)],
+        [:your_addr, method(:net_addr)],
+        [:my_addr,   method(:net_addr)],
+        [:nonce,     method(:uint64)],
+        [:agent,     method(:string)],
+        [:height,    method(:uint32)],
+        [:relay,     method(:relay_flag)]
+      ],
+      :verack => [],
+      :mempool => [],
+      :addr => [[:addr, array_for(method(:net_addr))]],
+      :inv  => [[:inventory,  array_for(method(:inv_vect))]],
+      :merkleblock => [
+        [:hash,        method(:block_hash)],
+        [:version,     method(:uint32)],
+        [:prev_block,  method(:hash256)],
+        [:merkle_root, method(:hash256)],
+        [:timestamp,   method(:uint32)],
+        [:bits,        method(:uint32)],
+        [:nonce,       method(:uint32)],
+        [:total_txs,   method(:uint32)],
+        [:hashes,      array_for(method(:hash256))],
+        [:flags,       method(:string)]
+      ],
+      :tx => [
+        [:hash,      method(:tx_hash)],
+        [:version,   method(:uint32)],
+        [:tx_in,     array_for(method(:tx_in))],
+        [:tx_out,    array_for(method(:tx_out))],
+        [:lock_time, method(:uint32)]
+      ],
+      :filterload => [
+        [:filter,     method(:string)],
+        [:hash_funcs, method(:uint32)],
+        [:tweak,      method(:uint32)],
+        [:flag,       method(:uint8)]
+      ],
+      :getblocks => [
+        [:version,       method(:uint32)],
+        [:block_locator, array_for(method(:hash256))],
+        [:hash_stop,     method(:hash256)]
+      ],
+      :getdata => [[:inventory, array_for(method(:inv_vect))]]
+    }
+  end
+
+  def is_defined?(message)
+    return @message_definitions.has_key?(message)
+  end
+
+  #
+  # Serialize a message using message definitions.
+  #
+  def serialize(message)
+    @payload = ''
+    @message_definitions[message[:command]].each do |message_definition|
+      next if message_definition.first == :hash
+      message_definition.last.call(:write, message[message_definition.first])
+    end
+
+    return @payload
+  end
+
+  #
+  # Deserialize a message using message definitions.
+  #
+  def deserialize(command, payload)
+    raise unless is_defined?(command)
+
+    res = { :command => command }
+
+    @payload = payload
+
+    @message_definitions[command].each do |message_definition|
+      res[message_definition.first] = message_definition.last.call(:read)
+    end
+
+    return res
+  end
+
+  private
+
+  #
+  # Higher order function to generate array serializer / deserializer
+  #
+  def array_for(elm)
+    return lambda do |rw, val = nil|
+      case rw
+      when :read
+        count = integer(:read)
+        res = []
+        count.times do
+          res.push elm.call(:read)
+        end
+        return res
+      when :write
+        integer(:write, val.length)
+        val.each do |v|
+          elm.call(:write, v)
+        end
+        return val
+      end
+    end
+  end
+
+  #
+  # Serializer & deserializer methods
+  #
+
+  def read_bytes(len)
+    res = @payload[0, len]
+    @payload = @payload[len..-1]
+    return res
+  end
+
+  def write_bytes(val)
+    @payload += val
+  end
+
+  def fixed_integer(templ, len, rw, val = nil)
+    case rw
+    when :read 
+      res = read_bytes(len).unpack(templ).first
+      return res
+    when :write
+      write_bytes([val].pack(templ))
+    end
+  end
+
+  def uint8(rw, val = nil)
+    return fixed_integer('C', 1, rw, val)
+  end
+
+  def uint16(rw, val = nil)
+    return fixed_integer('v', 2, rw, val)
+  end
+
+  def uint32(rw, val = nil)
+    return fixed_integer('V', 4, rw, val)
+  end
+
+  def uint64(rw, val = nil)
+    return fixed_integer('Q', 8, rw, val)
+  end
+
+  def integer(rw, val = nil)
+    case rw
+    when :read
+      top = uint8(:read)
+
+      if top < 0xfd then
+        return top
+      elsif top == 0xfd then
+        return uint16(:read)
+      elsif top == 0xfe then
+        return uint32(:read)
+      elsif top == 0xff then
+        return uint64(:read)
+      end
+
+    when :write
+      if val < 0xfd then
+        uint8(:write, val)
+      elsif val <= 0xffff then
+        uint8(:write, 0xfd)
+        uint16(:write, val)
+      elsif val <= 0xffffffff then
+        uint8(:write, 0xfe)
+        uint32(:write, val)
+      else
+        uint8(:write, 0xff)
+        uint64(:write, val)
+      end
+    end
+  end
+
+  def string(rw, val = nil)
+    case rw
+    when :read
+      len = integer(:read)
+      return read_bytes(len)
+    when :write
+      integer(:write, val.length)
+      write_bytes(val)
+      return val
+    end
+  end
+
+  def net_addr(rw, val = nil)
+    # accurate serializing is not necessary
+    case rw
+    when :read
+      read_bytes(26)
+      return {}
+    when :write
+      write_bytes([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*v'))
+      return val
+    end
+  end
+
+  def relay_flag(rw, val = nil)
+    case rw
+    when :read
+      if @payload.length > 0 then
+        return uint8(:read)
+      else
+        return true
+      end
+    when :write
+      unless val then
+        uint8(:write, 0)
+      end
+      return val
+    end
+  end
+
+  def hash256(rw, val = nil)
+    case rw
+    when :read
+      res = read_bytes(32)
+      return res
+    when :write
+      write_bytes(val)
+      return val
+    end
+  end
+
+  def inv_vect(rw, val = nil)
+    val ||= {}
+    return { :type => uint32(rw, val[:type]), :hash => hash256(rw, val[:hash]) }
+  end
+
+  def block_hash(rw, val = nil)
+    case rw
+    when :read
+      return Key.hash256(@payload[0, 80])
+    end
+  end
+
+  def tx_hash(rw, val = nil)
+    case rw
+    when :read
+      return Key.hash256(@payload)
+    end
+  end
+
+  def outpoint(rw, val = nil)
+    val ||= {}
+    return { :hash => hash256(rw, val[:hash]), :index => uint32(rw, val[:index]) }
+  end
+
+  def tx_in(rw, val = nil)
+    val ||= {}
+    return { :previous_output  => outpoint(rw, val[:previous_output]),
+             :signature_script => string(rw, val[:signature_script]),
+             :sequence         => uint32(rw, val[:sequence]) }
+  end
+
+  def tx_out(rw, val = nil)
+    val ||= {}
+    return { :value => uint64(rw, val[:value]), :pk_script => string(rw, val[:pk_script]) }
+  end
+
+end
+
+#
 # The network class. It should be separated into two or three classes
 # to manage multiple connections in real implementation.
 # However, since this is a extremely simplified implementation, they are integrated into this class.
 #
 class Network
-  public
-
   attr_reader :status, :data
 
   # 
   # keys = { name => ECDSA key objects }
   #
   def initialize(keys, data_file_name)
+    @message = Message.new
+
     @keys = keys
     @data_file_name = data_file_name
 
@@ -466,10 +750,10 @@ class Network
 
       duplicated[:tx_in][i][:signature_script] = tx_in_elm[:pk_script]
 
-      serialize_message(duplicated)
+      payload = @message.serialize(duplicated)
 
       # hash256 includes type code field (see the figure in the URL above)
-      verified_str = Key.hash256(@payload + [1].pack('V'))
+      verified_str = Key.hash256(payload + [1].pack('V'))
 
       signatures.push from_key.sign(verified_str)
     end
@@ -542,29 +826,13 @@ class Network
     length   = @socket.read(4).unpack('V').first
     checksum = @socket.read(4)
 
-    @r_payload = @socket.read(length)
+    payload = @socket.read(length)
 
-    raise 'incorrect checksum' if Key.hash256(@r_payload)[0, 4] != checksum
+    raise 'incorrect checksum' if Key.hash256(payload)[0, 4] != checksum
 
-    raise "unknown message #{command}" unless message_defs.has_key?(command)
+    raise "unknown message #{command}" unless @message.is_defined?(command)
 
-    res = { :command => command }
-
-    message_defs[command].each do |message_def|
-      res[message_def.first] = message_def.last.call(:read)
-    end
-
-    return res
-  end
-
-  #
-  # Serialize a message using message definitions.
-  #
-  def serialize_message(message)
-    @payload = ''
-    message_defs[message[:command]].each do |message_def|
-      message_def.last.call(:write, message[message_def.first]) unless message_def.first == :hash
-    end
+    return @message.deserialize(command, payload)
   end
 
   #
@@ -572,7 +840,7 @@ class Network
   #
   def write_message(message)
     # Create payload
-    serialize_message(message)
+    payload = @message.serialize(message)
 
     # 4bytes: magic
     raw_message = [IS_TESTNET ? '0b110907' : 'f9beb4d9'].pack('H*')
@@ -581,279 +849,17 @@ class Network
     raw_message += [message[:command].to_s].pack('a12')
 
     # 4bytes: length of payload
-    raw_message += [@payload.length].pack('V')
+    raw_message += [payload.length].pack('V')
 
     # 4bytes: checksum
-    raw_message += Key.hash256(@payload)[0, 4]
+    raw_message += Key.hash256(payload)[0, 4]
 
     # payload
-    raw_message += @payload
+    raw_message += payload
 
     @socket.write raw_message
     @socket.flush
   end
-
-  #
-  # Serializer & deserializer methods
-  #
-
-  def read_bytes(len)
-    res = @r_payload[0, len]
-    @r_payload = @r_payload[len..-1]
-    return res
-  end
-
-  def write_bytes(val)
-    @payload += val
-  end
-
-  def fixed_integer(templ, len, rw, val = nil)
-    case rw
-    when :read 
-      res = read_bytes(len).unpack(templ).first
-      return res
-    when :write
-      write_bytes([val].pack(templ))
-    end
-  end
-
-  def uint8(rw, val = nil)
-    return fixed_integer('C', 1, rw, val)
-  end
-
-  def uint16(rw, val = nil)
-    return fixed_integer('v', 2, rw, val)
-  end
-
-  def uint32(rw, val = nil)
-    return fixed_integer('V', 4, rw, val)
-  end
-
-  def uint64(rw, val = nil)
-    return fixed_integer('Q', 8, rw, val)
-  end
-
-  def integer(rw, val = nil)
-    case rw
-    when :read
-      top = uint8(:read)
-
-      if top < 0xfd then
-        return top
-      elsif top == 0xfd then
-        return uint16(:read)
-      elsif top == 0xfe then
-        return uint32(:read)
-      elsif top == 0xff then
-        return uint64(:read)
-      end
-
-    when :write
-      if val < 0xfd then
-        uint8(:write, val)
-      elsif val <= 0xffff then
-        uint8(:write, 0xfd)
-        uint16(:write, val)
-      elsif val <= 0xffffffff then
-        uint8(:write, 0xfe)
-        uint32(:write, val)
-      else
-        uint8(:write, 0xff)
-        uint64(:write, val)
-      end
-    end
-  end
-
-  def string(rw, val = nil)
-    case rw
-    when :read
-      len = integer(:read)
-      return read_bytes(len)
-    when :write
-      integer(:write, val.length)
-      write_bytes(val)
-      return val
-    end
-  end
-
-  def net_addr(rw, val = nil)
-    # accurate serializing is not necessary
-    case rw
-    when :read
-      read_bytes(26)
-      return {}
-    when :write
-      write_bytes([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*v'))
-      return val
-    end
-  end
-
-  def relay_flag(rw, val = nil)
-    case rw
-    when :read
-      if @r_payload.length > 0 then
-        return uint8(:read)
-      else
-        return true
-      end
-    when :write
-      unless val then
-        uint8(:write, 0)
-      end
-      return val
-    end
-  end
-
-  def array(elm, rw, val = nil)
-    case rw
-    when :read
-      count = integer(:read)
-      res = []
-      count.times do
-        res.push elm.call(:read)
-      end
-      return res
-    when :write
-      integer(:write, val.length)
-      val.each do |v|
-        elm.call(:write, v)
-      end
-      return val
-    end
-  end
-  def hash256(rw, val = nil)
-    case rw
-    when :read
-      res = read_bytes(32)
-      return res
-    when :write
-      write_bytes(val)
-      return val
-    end
-  end
-
-  def inv_vect(rw, val = nil)
-    val ||= {}
-    return { :type => uint32(rw, val[:type]), :hash => hash256(rw, val[:hash]) }
-  end
-
-  def block_hash(rw, val = nil)
-    case rw
-    when :read
-      return Key.hash256(@r_payload[0, 80])
-    end
-  end
-
-  def tx_hash(rw, val = nil)
-    case rw
-    when :read
-      return Key.hash256(@r_payload)
-    end
-  end
-
-  def outpoint(rw, val = nil)
-    val ||= {}
-    return { :hash => hash256(rw, val[:hash]), :index => uint32(rw, val[:index]) }
-  end
-
-  def tx_in(rw, val = nil)
-    val ||= {}
-    return { :previous_output  => outpoint(rw, val[:previous_output]),
-             :signature_script => string(rw, val[:signature_script]),
-             :sequence         => uint32(rw, val[:sequence]) }
-  end
-
-  def tx_out(rw, val = nil)
-    val ||= {}
-    return { :value => uint64(rw, val[:value]), :pk_script => string(rw, val[:pk_script]) }
-  end
-
-
-  #
-  # Message definitions.
-  #
-  def message_defs
-    return @message_defs if @message_defs
-
-    uint8 = self.method(:uint8)
-    uint16 = self.method(:uint16)
-    uint32 = self.method(:uint32)
-    uint64 = self.method(:uint64)
-    string = self.method(:string)
-
-    net_addr   = self.method(:net_addr)
-    relay_flag = self.method(:relay_flag)
-
-    array = self.method(:array).to_proc
-
-    hash256    = self.method(:hash256)
-
-    inv_vect   = self.method(:inv_vect)
-
-    block_hash = self.method(:block_hash)
-    tx_hash    = self.method(:tx_hash)
-
-    outpoint   = self.method(:outpoint)
-    tx_in      = self.method(:tx_in)
-    tx_out     = self.method(:tx_out)
-
-
-    return @message_defs = {
-      :version => [
-        [:version,   uint32],
-        [:services,  uint64],
-        [:timestamp, uint64],
-        [:your_addr, net_addr],
-        [:my_addr,   net_addr],
-        [:nonce,     uint64],
-        [:agent,     string],
-        [:height,    uint32],
-        [:relay,     relay_flag]
-      ],
-      :verack => [],
-      :mempool => [],
-      :addr => [[:addr, array.curry[net_addr]]],
-      :inv  => [[:inventory,  array.curry[inv_vect]]],
-      :merkleblock => [
-        [:hash,        block_hash],
-        [:version,     uint32],
-        [:prev_block,  hash256],
-        [:merkle_root, hash256],
-        [:timestamp,   uint32],
-        [:bits,        uint32],
-        [:nonce,       uint32],
-        [:total_txs,   uint32],
-        [:hashes,      array.curry[hash256]],
-        [:flags,       string]
-      ],
-      :tx => [
-        [:hash,      tx_hash],
-        [:version,   uint32],
-        [:tx_in,     array.curry[tx_in]],
-        [:tx_out,    array.curry[tx_out]],
-        [:lock_time, uint32]
-      ],
-      :filterload => [
-        [:filter,     string],
-        [:hash_funcs, uint32],
-        [:tweak,      uint32],
-        [:flag,       uint8]
-      ],
-      :getblocks => [
-        [:version,       uint32],
-        [:block_locator, array.curry[hash256]],
-        [:hash_stop,     hash256]
-      ],
-      :getdata => [[:inventory, array.curry[inv_vect]]]
-    }
-  end
-
-  #
-  # Constants used in inventory vector
-  #
-  MSG_TX = 1
-  MSG_BLOCK = 2
-  MSG_FILTERED_BLOCK = 3
 
   #
   # Send version message to the remote host.
@@ -925,7 +931,7 @@ class Network
     end
 
     if @data[:blocks].empty? then
-      send_getdata([{:type => MSG_FILTERED_BLOCK, :hash => @last_hash[:hash]}])
+      send_getdata([{:type => Message::MSG_FILTERED_BLOCK, :hash => @last_hash[:hash]}])
     end
 
     write_message({
@@ -948,7 +954,7 @@ class Network
 
       :inventory => inventory.collect do |elm|
         # receive merkleblock instead of usual block
-        {:type => (elm[:type] == MSG_BLOCK ? MSG_FILTERED_BLOCK : elm[:type]),
+        {:type => (elm[:type] == Message::MSG_BLOCK ? Message::MSG_FILTERED_BLOCK : elm[:type]),
          :hash => elm[:hash]}
       end
     })
@@ -960,13 +966,13 @@ class Network
   # Send inv message when you created a transaction
   #
   def send_transaction_inv
-    serialize_message(@created_transaction)
+    payload = @message.serialize(@created_transaction)
 
-    @created_transaction[:hash] = Key.hash256(@payload)
+    @created_transaction[:hash] = Key.hash256(payload)
     
     write_message({
       :command => :inv,
-      :inventory => [{:type => MSG_TX, :hash => @created_transaction[:hash]}]
+      :inventory => [{:type => Message::MSG_TX, :hash => @created_transaction[:hash]}]
     })
   end
 
@@ -1127,6 +1133,54 @@ end
 # The class deals with command line arguments and the key file.
 #
 class BCWallet
+  def initialize(argv, keys_file_name, data_file_name)
+    @argv = argv
+    @keys_file_name = keys_file_name
+    @data_file_name = data_file_name
+    @network = nil
+  end
+
+  def run
+    return usage if @argv.length < 1
+
+    load_keys
+
+    case @argv.first
+    when 'generate'
+      return if require_args(1)
+
+      # name = @argv[1]
+      generate(@argv[1])
+
+    when 'list'
+      list
+
+    when 'export'
+      return if require_args(1)
+
+      # name = @argv[1]
+      export(@argv[1])
+
+    when 'balance'
+      balance
+
+    when 'send'
+      return if require_args(3)
+
+      # name = @argv[1], to = @argv[2], amount = @argv[3] (converted into satoshi)
+      send(@argv[1], @argv[2], @argv[3].to_r * Rational(10 ** 8))
+
+    when 'block'
+      return if require_args(1)
+
+      # hash = @argv[1]
+      block(@argv[1])
+
+    else
+      return usage 'invalid command'
+    end
+  end
+
   private
 
   def usage(error = nil)
@@ -1257,56 +1311,6 @@ class BCWallet
   def block(hash)
     init_network
     p @network.data[:blocks][[hash].pack('H*').reverse]
-  end
-
-  public
-
-  def initialize(argv, keys_file_name, data_file_name)
-    @argv = argv
-    @keys_file_name = keys_file_name
-    @data_file_name = data_file_name
-    @network = nil
-  end
-
-  def run
-    return usage if @argv.length < 1
-
-    load_keys
-
-    case @argv.first
-    when 'generate'
-      return if require_args(1)
-
-      # name = @argv[1]
-      generate(@argv[1])
-
-    when 'list'
-      list
-
-    when 'export'
-      return if require_args(1)
-
-      # name = @argv[1]
-      export(@argv[1])
-
-    when 'balance'
-      balance
-
-    when 'send'
-      return if require_args(3)
-
-      # name = @argv[1], to = @argv[2], amount = @argv[3] (converted into satoshi)
-      send(@argv[1], @argv[2], @argv[3].to_r * Rational(10 ** 8))
-
-    when 'block'
-      return if require_args(1)
-
-      # hash = @argv[1]
-      block(@argv[1])
-
-    else
-      return usage 'invalid command'
-    end
   end
 end
 
