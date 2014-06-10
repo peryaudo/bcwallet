@@ -771,6 +771,8 @@ class Network
   def message_defs
     return @message_defs if @message_defs
 
+    uint8 = self.method(:uint8)
+    uint16 = self.method(:uint16)
     uint32 = self.method(:uint32)
     uint64 = self.method(:uint64)
     string = self.method(:string)
@@ -960,7 +962,7 @@ class Network
     
     write_message({
       :command => :inv,
-      :inventory => [{:type => MSG_TX, :hash => hash}]
+      :inventory => [{:type => MSG_TX, :hash => @created_transaction[:hash]}]
     })
   end
 
@@ -1284,7 +1286,7 @@ class BCWallet
       export(@argv[1])
 
     when 'balance'
-      balace
+      balance
 
     when 'send'
       return if require_args(3)
