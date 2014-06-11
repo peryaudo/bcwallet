@@ -503,7 +503,7 @@ class Message
     case rw
     when :read
       read_bytes(26)
-      {}
+      nil
     when :write
       write_bytes([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*n'))
       val
