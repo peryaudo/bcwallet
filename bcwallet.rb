@@ -505,7 +505,7 @@ class Message
       read_bytes(26)
       {}
     when :write
-      write_bytes([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*v'))
+      write_bytes([0, '00000000000000000000FFFF', '00000000', 8333].pack('QH*H*n'))
       val
     end
   end
@@ -1152,7 +1152,8 @@ class BCWallet
     when 'send'     then return if require_args(3)
     when 'block'    then return if require_args(1)
     else
-      return usage 'invalid command'
+      usage 'invalid command'
+      return
     end
 
     load_keys
