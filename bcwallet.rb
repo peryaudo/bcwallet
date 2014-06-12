@@ -388,6 +388,52 @@ class Message
     res
   end
 
+  # 
+  # Read a message and parse it using message definitions.
+  #
+  def read(socket)
+    magic = socket.read(4).unpack('H*').first
+    raise 'invalid magic received' if magic != (IS_TESTNET ? '0b110907' : 'f9beb4d9')
+
+    command  = socket.read(12).unpack('A12').first.to_sym
+    length   = socket.read(4).unpack('V').first
+    checksum = socket.read(4)
+
+    payload = socket.read(length)
+
+    raise 'incorrect checksum' if Key.hash256(payload)[0, 4] != checksum
+
+    raise "unknown message #{command}" unless is_defined?(command)
+
+    deserialize(command, payload)
+  end
+
+  #
+  # Actually send a message to the remote host.
+  #
+  def write(socket, message)
+    # Create payload
+    payload = serialize(message)
+
+    # 4bytes: magic
+    raw_message = [IS_TESTNET ? '0b110907' : 'f9beb4d9'].pack('H*')
+
+    # 12bytes: command (padded with zeroes)
+    raw_message += [message[:command].to_s].pack('a12')
+
+    # 4bytes: length of payload
+    raw_message += [payload.length].pack('V')
+
+    # 4bytes: checksum
+    raw_message += Key.hash256(payload)[0, 4]
+
+    # payload
+    raw_message += payload
+
+    socket.write raw_message
+    socket.flush
+  end
+
   private
 
   #
@@ -641,6 +687,35 @@ class Blockchain
   end
 
   #
+  # Get balance for the keys
+  #
+  def get_balance(keys)
+    balance = {}
+    keys.each do |addr, _|
+      balance[addr] = 0
+    end
+
+    set_spent_for_tx_outs!
+
+    @data[:txs].each do |tx_hash, tx|
+      keys.each do |addr, key|
+        public_key_hash = key.to_public_key_hash
+
+        tx[:tx_out].each do |tx_out|
+          # The tx_out was already spent
+          next if tx_out[:spent]
+
+          if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash
+            balance[addr] += tx_out[:value]
+          end
+        end
+      end
+    end
+
+    balance
+  end
+
+  #
   # This is a heuristic function, to find out whether the block is independent young block,
   # which is not actually the last block you received through getblocks -> inv -> getdata iteration.
   #
@@ -868,86 +943,18 @@ class Network
   # Get balance for the keys
   #
   def get_balance
-    balance = {}
-    @keys.each do |addr, _|
-      balance[addr] = 0
-    end
-
-    @blockchain.set_spent_for_tx_outs!
-
-    @blockchain.txs.each do |tx_hash, tx|
-      @keys.each do |addr, key|
-        public_key_hash = key.to_public_key_hash
-
-        tx[:tx_out].each do |tx_out|
-          # The tx_out was already spent
-          next if tx_out[:spent]
-
-          if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash
-            balance[addr] += tx_out[:value]
-          end
-        end
-      end
-    end
-
-    balance
+    @blockchain.get_balance(@keys)
   end
 
   private
 
   PROTOCOL_VERSION = 70001
 
-  # 
-  # Read a message and parse it using message definitions.
-  #
-  def read_message
-    magic = @socket.read(4).unpack('H*').first
-    raise 'invalid magic received' if magic != (IS_TESTNET ? '0b110907' : 'f9beb4d9')
-
-    command  = @socket.read(12).unpack('A12').first.to_sym
-    length   = @socket.read(4).unpack('V').first
-    checksum = @socket.read(4)
-
-    payload = @socket.read(length)
-
-    raise 'incorrect checksum' if Key.hash256(payload)[0, 4] != checksum
-
-    raise "unknown message #{command}" unless @message.is_defined?(command)
-
-    @message.deserialize(command, payload)
-  end
-
-  #
-  # Actually send a message to the remote host.
-  #
-  def write_message(message)
-    # Create payload
-    payload = @message.serialize(message)
-
-    # 4bytes: magic
-    raw_message = [IS_TESTNET ? '0b110907' : 'f9beb4d9'].pack('H*')
-
-    # 12bytes: command (padded with zeroes)
-    raw_message += [message[:command].to_s].pack('a12')
-
-    # 4bytes: length of payload
-    raw_message += [payload.length].pack('V')
-
-    # 4bytes: checksum
-    raw_message += Key.hash256(payload)[0, 4]
-
-    # payload
-    raw_message += payload
-
-    @socket.write raw_message
-    @socket.flush
-  end
-
   #
   # Send version message to the remote host.
   #
   def send_version
-    write_message({
+    @message.write(@socket, {
       command: :version,
 
       version:   PROTOCOL_VERSION,
@@ -984,7 +991,7 @@ class Network
       bf.insert(key.to_public_key_hash)
     end
 
-    write_message({
+    @message.write(@socket, {
       command: :filterload,
 
       filter:     bf.to_s,
@@ -1016,7 +1023,7 @@ class Network
       send_getdata([{type: Message::MSG_FILTERED_BLOCK, hash: @last_hash[:hash]}])
     end
 
-    write_message({
+    @message.write(@socket, {
       command: :getblocks,
 
       version: PROTOCOL_VERSION,
@@ -1031,7 +1038,7 @@ class Network
   # Send getdata message for the inventory while rewriting MSG_BLOCK to MSG_FILTERED_BLOCK
   #
   def send_getdata(inventory)
-    write_message({
+    @message.write(@socket, {
       command: :getdata,
 
       inventory: inventory.collect do |elm|
@@ -1050,7 +1057,7 @@ class Network
 
     @created_transaction[:hash] = Key.hash256(payload)
     
-    write_message({
+    @message.write(@socket, {
       command: :inv,
       inventory: [{type: Message::MSG_TX, hash: @created_transaction[:hash]}]
     })
@@ -1060,7 +1067,7 @@ class Network
   # Send transaction message you created
   #
   def send_transaction
-    write_message(@created_transaction)
+    @message.write(@socket, @created_transaction)
 
     @socket.flush
 
@@ -1079,7 +1086,7 @@ class Network
   # Returns true if the whole process has been finished, otherwise false.
   #
   def dispatch_message
-    message = read_message
+    message = @message.read
 
     case message[:command]
     when :version
@@ -1094,7 +1101,7 @@ class Network
       @blockchain.last_height = message[:height]
       @blockchain.save_data
 
-      write_message({command: :verack})
+      @message.write(@socket, {command: :verack})
 
     when :verack
       # Handshake finished, so you can do anything you want.
@@ -1103,7 +1110,7 @@ class Network
       send_filterload
 
       # Tell the remote host to send transactions (inv) it has in its memory pool.
-      write_message({command: :mempool})
+      @message.write(@socket, {command: :mempool})
 
       # Send getblocks on demand and return true
       return true if send_getblocks
