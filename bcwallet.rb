@@ -761,6 +761,46 @@ class Blockchain
     (@data[:blocks][hash][:timestamp] - Time.now.to_i).abs <= 60 * 60 && !is_too_high(hash)
   end
 
+  def accumulate_txs(from_key, amount)
+    public_key_hash = from_key.to_public_key_hash
+
+    # refresh spent flags of tx_outs
+    set_spent_for_tx_outs!
+
+    # In a real SPV client, we should walk along merkle trees to validate the transaction.
+    # It will be implemented to this client soon.
+    total_satoshis = 0
+    tx_in = []
+    @blockchain.txs.each do |tx_hash, tx|
+      break if total_satoshis >= amount
+
+      matched = nil
+      pk_script = nil
+
+      tx[:tx_out].each_with_index do |tx_out, index|
+        next if tx_out[:spent]
+
+        if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash
+          total_satoshis += tx_out[:value]
+          matched = index
+          pk_script = tx_out[:pk_script]
+          break
+        end
+      end
+
+      if matched
+        tx_in.push({ previous_output:  { :hash => tx[:hash], :index => matched },
+                     signature_script: '',
+                     sequence:         ((1 << 32) - 1),
+
+                     # not included in serialized data, but used to make signature
+                     pk_script: pk_script })
+      end
+    end
+
+    { total_satoshis: total_satoshis, tx_in: tx_in }
+  end
+
   #
   # Set spent flags for all tx_outs.
   # If the tx_out is already spent on another transaction's tx_in, it will be set.
@@ -791,6 +831,21 @@ class Blockchain
       cur += 1
     end
     cur == threshold
+  end
+
+  #
+  # Bitcoin has complex scripting system for its payment,
+  # but we will only support very basic one.
+  #
+  def extract_public_key_hash_from_script(script)
+    # OP_DUP OP_HASH160 (public key hash) OP_EQUALVERIFY OP_CHECKSIG
+    unless script[0, 3]  == ['76a914'].pack('H*') &&
+           script[23, 2] == ['88ac'].pack('H*') &&
+           script.length == 25
+      raise 'unsupported script format' 
+    end
+
+    script[3, 20]
   end
 end
 
@@ -868,47 +923,11 @@ class Network
     #   Then the remote host will send getdata, so you can now actually send tx message.
 
     to_addr_decoded = Key.decode_base58check(to_addr)
-
     raise "invalid address" if to_addr_decoded[:type] != :public_key
 
-    public_key_hash = from_key.to_public_key_hash
+    accumulated = @blockchain.accumulate_txs(from_key, amount)
 
-    # refresh spent flags of tx_outs
-    @blockchain.set_spent_for_tx_outs!
-
-    # In a real SPV client, we should walk along merkle trees to validate the transaction.
-    # It will be implemented to this client soon.
-    total_satoshis = 0
-    tx_in = []
-    @blockchain.txs.each do |tx_hash, tx|
-      break if total_satoshis >= amount
-
-      matched = nil
-      pk_script = nil
-
-      tx[:tx_out].each_with_index do |tx_out, index|
-        next if tx_out[:spent]
-
-        if extract_public_key_hash_from_script(tx_out[:pk_script]) == public_key_hash
-          total_satoshis += tx_out[:value]
-          matched = index
-          pk_script = tx_out[:pk_script]
-          break
-        end
-      end
-
-      if matched
-        tx_in.push({ previous_output:  { :hash => tx[:hash], :index => matched },
-                     signature_script: '',
-                     sequence:         ((1 << 32) - 1),
-
-                     # not included in serialized data, but used to make signature
-                     pk_script: pk_script })
-      end
-    end
-
-    payback = total_satoshis - amount - transaction_fee
-
+    payback = accmulated[:total_satoshis] - amount - transaction_fee
     raise "you don't have enough balance to pay" unless payback >= 0
 
     # pk_script field is constructed in Bitcoin's scripting system
@@ -924,7 +943,7 @@ class Network
       command: :tx,
 
       version: 1,
-      tx_in: tx_in,
+      tx_in: accumulated[:tx_in],
       tx_out: tx_out,
       lock_time: 0
     }
@@ -1153,22 +1172,6 @@ class Network
 
     return false
   end
-
-  #
-  # Bitcoin has complex scripting system for its payment,
-  # but we will only support very basic one.
-  #
-  def extract_public_key_hash_from_script(script)
-    # OP_DUP OP_HASH160 (public key hash) OP_EQUALVERIFY OP_CHECKSIG
-    unless script[0, 3]  == ['76a914'].pack('H*') &&
-           script[23, 2] == ['88ac'].pack('H*') &&
-           script.length == 25
-      raise 'unsupported script format' 
-    end
-
-    script[3, 20]
-  end
-
 
   def sign_transaction(transaction)
     signatures = []
