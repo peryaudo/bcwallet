@@ -402,7 +402,7 @@ class Message
   def read(socket)
     packet = read_packet(socket)
 
-    expected_magic    = [IS_TESTNET ? '0b110907' : 'f9beb4d9'].pack('V')
+    expected_magic    = [IS_TESTNET ? '0b110907' : 'f9beb4d9'].pack('H*')
     expected_checksum = Key.hash256(packet[:payload])[0, 4]
 
     if packet[:magic] != expected_magic
@@ -1106,7 +1106,7 @@ class Network
   # Returns true if the whole process has been finished, otherwise false.
   #
   def dispatch_message
-    message = @message.read
+    message = @message.read(@socket)
 
     case message[:command]
     when :version
