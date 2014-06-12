@@ -923,34 +923,28 @@ class Network
     #   Then the remote host will send getdata, so you can now actually send tx message.
 
     to_addr_decoded = Key.decode_base58check(to_addr)
-    raise "invalid address" if to_addr_decoded[:type] != :public_key
+    if to_addr_decoded[:type] != :public_key
+      raise 'invalid address'
+    end
 
     accumulated = @blockchain.accumulate_txs(from_key, amount)
 
     payback = accumulated[:total_satoshis] - amount - transaction_fee
-    raise "you don't have enough balance to pay" unless payback >= 0
+    unless payback >= 0
+      raise "you don't have enough balance to pay"
+    end
 
-    # pk_script field is constructed in Bitcoin's scripting system
-    #    https://en.bitcoin.it/wiki/Script
-    #
-    prefix = ['76a914'].pack('H*') # OP_DUP OP_HASH160 [length of the address]
-    postfix = ['88ac'].pack('H*')  # OP_EQUALVERIFY OP_CHECKSIG
-    
-    tx_out = [{ value: amount,  pk_script: (prefix + to_addr_decoded[:data] + postfix) },
-              { value: payback, pk_script: (prefix + from_key.to_public_key_hash + postfix) }]
-
-    transaction = {
+    @created_transaction = sign_transaction(from_key, {
       command: :tx,
 
       version: 1,
-      tx_in: accumulated[:tx_in],
-      tx_out: tx_out,
-      lock_time: 0
-    }
 
-    # We have generated all data without signatures, so we're now going to generate signatures.
-    # However, it is very complicated one.
-    @created_transaction = sign_transaction(from_key, transaction)
+      tx_in: accumulated[:tx_in],
+      tx_out: [{ value: amount,  pk_script: generate_pk_script(to_addr_decoded[:data]) },
+               { value: payback, pk_script: generate_pk_script(from_key.to_public_key_hash) }],
+
+      lock_time: 0
+    })
 
     @status = ''
   end
@@ -1190,6 +1184,8 @@ class Network
   end
 
   def sign_transaction(from_key, transaction)
+    # We have generated all data without signatures, so we're now going to generate signatures.
+    # However, it is very complicated one.
     signatures = []
 
     transaction[:tx_in].each_with_index do |tx_in_elm, i|
@@ -1226,6 +1222,16 @@ class Network
     end
 
     return transaction
+  end
+
+  def generate_pk_script(public_key_hash)
+    # pk_script field is constructed in Bitcoin's scripting system
+    #    https://en.bitcoin.it/wiki/Script
+    #
+    prefix = ['76a914'].pack('H*') # OP_DUP OP_HASH160 [length of the address]
+    postfix = ['88ac'].pack('H*')  # OP_EQUALVERIFY OP_CHECKSIG
+
+    prefix + public_key_hash + postfix
   end
 end
 
