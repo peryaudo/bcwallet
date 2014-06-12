@@ -306,51 +306,64 @@ class Message
     #
     @message_definitions = {
       version: [
-        [:version,   method(:uint32)],
-        [:services,  method(:uint64)],
-        [:timestamp, method(:uint64)],
-        [:your_addr, method(:net_addr)],
-        [:my_addr,   method(:net_addr)],
-        [:nonce,     method(:uint64)],
-        [:agent,     method(:string)],
-        [:height,    method(:uint32)],
-        [:relay,     method(:relay_flag)]
+        [:version,   :uint32],
+        [:services,  :uint64],
+        [:timestamp, :uint64],
+        [:your_addr, :net_addr],
+        [:my_addr,   :net_addr],
+        [:nonce,     :uint64],
+        [:agent,     :string],
+        [:height,    :uint32],
+        [:relay,     :relay_flag]
       ],
       verack:  [],
       mempool: [],
-      addr:    [[:addr, array_for(method(:net_addr))]],
-      inv:     [[:inventory,  array_for(method(:inv_vect))]],
+      addr:    [[:addr, array_for(:net_addr)]],
+      inv:     [[:inventory,  array_for(:inv_vect)]],
       merkleblock: [
-        [:hash,        method(:block_hash)],
-        [:version,     method(:uint32)],
-        [:prev_block,  method(:hash256)],
-        [:merkle_root, method(:hash256)],
-        [:timestamp,   method(:uint32)],
-        [:bits,        method(:uint32)],
-        [:nonce,       method(:uint32)],
-        [:total_txs,   method(:uint32)],
-        [:hashes,      array_for(method(:hash256))],
-        [:flags,       method(:string)]
+        [:hash,        :block_hash],
+        [:version,     :uint32],
+        [:prev_block,  :hash256],
+        [:merkle_root, :hash256],
+        [:timestamp,   :uint32],
+        [:bits,        :uint32],
+        [:nonce,       :uint32],
+        [:total_txs,   :uint32],
+        [:hashes,      array_for(:hash256)],
+        [:flags,       :string]
       ],
       tx: [
-        [:hash,      method(:tx_hash)],
-        [:version,   method(:uint32)],
-        [:tx_in,     array_for(method(:tx_in))],
-        [:tx_out,    array_for(method(:tx_out))],
-        [:lock_time, method(:uint32)]
+        [:hash,      :tx_hash],
+        [:version,   :uint32],
+        [:tx_in,     array_for(:tx_in)],
+        [:tx_out,    array_for(:tx_out)],
+        [:lock_time, :uint32]
       ],
       filterload: [
-        [:filter,     method(:string)],
-        [:hash_funcs, method(:uint32)],
-        [:tweak,      method(:uint32)],
-        [:flag,       method(:uint8)]
+        [:filter,     :string],
+        [:hash_funcs, :uint32],
+        [:tweak,      :uint32],
+        [:flag,       :uint8]
       ],
       getblocks: [
-        [:version,       method(:uint32)],
-        [:block_locator, array_for(method(:hash256))],
-        [:hash_stop,     method(:hash256)]
+        [:version,       :uint32],
+        [:block_locator, array_for(:hash256)],
+        [:hash_stop,     :hash256]
       ],
-      getdata: [[:inventory, array_for(method(:inv_vect))]]
+      getdata: [[:inventory, array_for(:inv_vect)]],
+      inv_vect: [
+        [:type, :uint32],
+        [:hash, :hash256]],
+      outpoint: [
+        [:hash, :hash256],
+        [:index, :uint32]],
+      tx_in: [
+        [:previous_output, :outpoint],
+        [:signature_script, :string],
+        [:sequence, :uint32]],
+      tx_out: [
+        [:value, :uint64],
+        [:pk_script, :string]]
     }
   end
 
@@ -363,10 +376,8 @@ class Message
   #
   def serialize(message)
     @payload = ''
-    @message_definitions[message[:command]].each do |message_definition|
-      next if message_definition.first == :hash
-      message_definition.last.call(:write, message[message_definition.first])
-    end
+
+    serialize_struct(message[:command], message)
 
     @payload
   end
@@ -377,13 +388,10 @@ class Message
   def deserialize(command, payload)
     raise unless is_defined?(command)
 
-    res = { command: command }
-
     @payload = payload
 
-    @message_definitions[command].each do |message_definition|
-      res[message_definition.first] = message_definition.last.call(:read)
-    end
+    res = deserialize_struct(command)
+    res[:command] = command
 
     res
   end
@@ -450,6 +458,38 @@ class Message
     { magic: magic, command: command, checksum: checksum, payload: payload }
   end
 
+  def serialize_struct(type, struct)
+    if type.kind_of?(Proc)
+      type.call(:write, struct)
+      return
+    end
+
+    if @message_definitions.has_key?(type)
+      @message_definitions[type].each do |definition|
+        next if struct.has_key?(:command) && definition.first == :hash
+        serialize_struct(definition.last, struct[definition.first])
+      end
+    else
+      method(type).call(:write, struct)
+    end
+  end
+
+  def deserialize_struct(type)
+    if type.kind_of?(Proc)
+      return type.call(:read)
+    end
+
+    if @message_definitions.has_key?(type)
+      res = {}
+      @message_definitions[type].each do |definition|
+        res[definition.first] = deserialize_struct(definition.last)
+      end
+      res
+    else
+      method(type).call(:read)
+    end
+  end
+
   #
   # Higher order function to generate array serializer / deserializer
   #
@@ -460,13 +500,13 @@ class Message
         count = integer(:read)
         res = []
         count.times do
-          res.push elm.call(:read)
+          res.push deserialize_struct(elm)
         end
         res
       when :write
         integer(:write, val.length)
         val.each do |v|
-          elm.call(:write, v)
+          serialize_struct(elm, v)
         end
         val
       end
@@ -596,11 +636,6 @@ class Message
     end
   end
 
-  def inv_vect(rw, val = nil)
-    val ||= {}
-    { type: uint32(rw, val[:type]), hash: hash256(rw, val[:hash]) }
-  end
-
   def block_hash(rw, val = nil)
     case rw
     when :read
@@ -614,24 +649,6 @@ class Message
       Key.hash256(@payload)
     end
   end
-
-  def outpoint(rw, val = nil)
-    val ||= {}
-    { hash: hash256(rw, val[:hash]), index: uint32(rw, val[:index]) }
-  end
-
-  def tx_in(rw, val = nil)
-    val ||= {}
-    { previous_output:  outpoint(rw, val[:previous_output]),
-      signature_script: string(rw, val[:signature_script]),
-      sequence:         uint32(rw, val[:sequence]) }
-  end
-
-  def tx_out(rw, val = nil)
-    val ||= {}
-    { value: uint64(rw, val[:value]), pk_script: string(rw, val[:pk_script]) }
-  end
-
 end
 
 #
