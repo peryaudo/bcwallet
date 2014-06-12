@@ -575,6 +575,120 @@ class Message
 end
 
 #
+# The blockchain class. It manages and stores Bitcoin blockchain data.
+#
+class Blockchain
+  def initialize(keys, data_file_name)
+    @data_file_name = data_file_name
+
+    keys_hash = Key.hash256(keys.collect { |key, _| key }.sort.join)
+
+    init_data(keys_hash)
+    load_data
+
+    # new keys are added since the last synchronization
+    init_data(keys_hash) if @data[:keys_hash] != keys_hash
+  end
+
+  def init_data(keys_hash)
+    @data = { blocks: {}, txs: {}, last_height: 0, keys_hash: keys_hash }
+  end
+
+  def load_data
+    return unless File.exists?(@data_file_name)
+
+    open(@data_file_name, 'rb') do |file|
+      @data = Marshal.restore(file)
+    end
+  end
+
+  def save_data
+    open(@data_file_name, 'wb') do |file|
+      Marshal.dump @data, file
+    end
+  end
+
+  def calc_last_hash
+    # These hashes are genesis blocks'.
+    last_hash = { timestamp: 0,
+                   hash: [IS_TESTNET ?
+                     '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943' :
+                     '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'].pack('H*').reverse }
+
+    @data[:blocks].each do |hash, block|
+      if block[:timestamp] > last_hash[:timestamp]
+        last_hash = { timestamp: block[:timestamp], hash: hash }
+      end
+    end
+
+    last_hash
+  end
+
+  def blocks
+    @data[:blocks]
+  end
+
+  def txs
+    @data[:txs]
+  end
+
+  def last_height
+    @data[:last_height]
+  end
+
+  def last_height=(v)
+    @data[:last_height] = v
+  end
+
+  #
+  # This is a heuristic function, to find out whether the block is independent young block,
+  # which is not actually the last block you received through getblocks -> inv -> getdata iteration.
+  #
+  # In a more robust way, you have to construct graph from received blocks,
+  # do a lot of validations, and actually take the longest block chain.
+  #
+  # The reason why the client take this way is its performance.
+  # I can imagine a lot of code to realize this in C++, however,
+  # doing it in Ruby is painful and also it's not ciritical to explain how Bitcoin client works.
+  #
+  def is_young_block(hash)
+    (@data[:blocks][hash][:timestamp] - Time.now.to_i).abs <= 60 * 60 && !is_too_high(hash)
+  end
+
+  #
+  # Set spent flags for all tx_outs.
+  # If the tx_out is already spent on another transaction's tx_in, it will be set.
+  # 
+  def set_spent_for_tx_outs!
+    @data[:txs].each do |tx_hash, tx|
+      tx[:tx_in].each do |tx_in|
+        hash = tx_in[:previous_output][:hash]
+        index = tx_in[:previous_output][:index]
+        if @data[:txs].has_key?(hash)
+          @data[:txs][hash][:tx_out][index][:spent] = true
+        end
+      end
+    end
+  end
+
+  private
+
+  #
+  # This checks whether the block has previous 5 (= threshold) blocks
+  # in the received data.
+  #
+  def is_too_high(hash)
+    threshold = 5
+    cur = 0
+    while @data[:blocks].has_key?(hash) && cur < threshold
+      hash = @data[:blocks][hash][:prev_block]
+      cur += 1
+    end
+    cur == threshold
+  end
+end
+
+#
 # The network class. It should be separated into two or three classes
 # to manage multiple connections in real implementation.
 # However, since this is a extremely simplified implementation, they are integrated into this class.
@@ -589,31 +703,11 @@ class Network
     @message = Message.new
 
     @keys = keys
-    @data_file_name = data_file_name
 
-    keys_hash = Key.hash256(keys.collect { |key, _| key }.sort.join)
+    @blockchain = Blockchain.new(@keys, data_file_name)
+    @last_hash = @blockchain.calc_last_hash
 
-    @data = { blocks: {}, txs: {}, last_height: 0, keys_hash: keys_hash }
     @is_sync_finished = true
-
-    load_data
-
-    if @data[:keys_hash] != keys_hash
-      # new keys are added since the last synchronization
-      @data = { blocks: {}, txs: {}, last_height: 0, keys_hash: keys_hash }
-    end
-
-    # These hashes are genesis blocks'.
-    @last_hash = { timestamp: 0,
-                   hash: [IS_TESTNET ?
-                     '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943' :
-                     '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'].pack('H*').reverse }
-
-    @data[:blocks].each do |hash, block|
-      if block[:timestamp] > @last_hash[:timestamp]
-        @last_hash = { timestamp: block[:timestamp], hash: hash }
-      end
-    end
 
     @requested_data = 0
     @received_data = 0
@@ -674,13 +768,13 @@ class Network
     public_key_hash = from_key.to_public_key_hash
 
     # refresh spent flags of tx_outs
-    set_spent_for_tx_outs
+    @blockchain.set_spent_for_tx_outs!
 
     # In a real SPV client, we should walk along merkle trees to validate the transaction.
     # It will be implemented to this client soon.
     total_satoshis = 0
     tx_in = []
-    @data[:txs].each do |tx_hash, tx|
+    @blockchain.txs.each do |tx_hash, tx|
       break if total_satoshis >= amount
 
       matched = nil
@@ -779,9 +873,9 @@ class Network
       balance[addr] = 0
     end
 
-    set_spent_for_tx_outs
+    @blockchain.set_spent_for_tx_outs!
 
-    @data[:txs].each do |tx_hash, tx|
+    @blockchain.txs.each do |tx_hash, tx|
       @keys.each do |addr, key|
         public_key_hash = key.to_public_key_hash
 
@@ -802,20 +896,6 @@ class Network
   private
 
   PROTOCOL_VERSION = 70001
-
-  def load_data
-    return unless File.exists?(@data_file_name)
-
-    open(@data_file_name, 'rb') do |file|
-      @data = Marshal.restore(file)
-    end
-  end
-
-  def save_data
-    open(@data_file_name, 'wb') do |file|
-      Marshal.dump @data, file
-    end
-  end
 
   # 
   # Read a message and parse it using message definitions.
@@ -883,7 +963,7 @@ class Network
       nonce:     (rand(1 << 64) - 1), # A random number.
 
       agent:     '/bcwallet.rb:1.00/',
-      height:    (@data[:blocks].length - 1), # Height of possessed blocks
+      height:    (@blockchain.blocks.length - 1), # Height of possessed blocks
 
       # It forces the remote host not to send any 'inv' messages till it receive 'filterload' message.
       relay:     false
@@ -922,17 +1002,17 @@ class Network
   #
   def send_getblocks
     weight = 50
-    perc = (weight * @data[:blocks].length / @data[:last_height]).to_i
+    perc = (weight * @blockchain.blocks.length / @blockchain.last_height).to_i
     @status = '|' + '=' * perc + '_' * (weight - perc) +
-      "| #{(@data[:blocks].length - 1)} / #{@data[:last_height]} "
+      "| #{(@blockchain.blocks.length - 1)} / #{@blockchain.last_height} "
 
-    # @data[:blocks].length includes block #0 while @data[:last_height] does not.
-    if @data[:blocks].length > @data[:last_height]
-      save_data
+    # @blockchain.blocks.length includes block #0 while @blockchain.last_height does not.
+    if @blockchain.blocks.length > @blockchain.last_height
+      @blockchain.save_data
       return true
     end
 
-    if @data[:blocks].empty?
+    if @blockchain.blocks.empty?
       send_getdata([{type: Message::MSG_FILTERED_BLOCK, hash: @last_hash[:hash]}])
     end
 
@@ -986,38 +1066,9 @@ class Network
 
     sleep 30
 
-    @data[:txs][@created_transaction[:hash]] = @created_transaction
+    @blockchain.txs[@created_transaction[:hash]] = @created_transaction
 
-    save_data
-  end
-
-  #
-  # This checks whether the block has previous 5 (= threshold) blocks
-  # in the received data.
-  #
-  def is_too_high(hash)
-    threshold = 5
-    cur = 0
-    while @data[:blocks].has_key?(hash) && cur < threshold
-      hash = @data[:blocks][hash][:prev_block]
-      cur += 1
-    end
-    cur == threshold
-  end
-
-  #
-  # This is a heuristic function, to find out whether the block is independent young block,
-  # which is not actually the last block you received through getblocks -> inv -> getdata iteration.
-  #
-  # In a more robust way, you have to construct graph from received blocks,
-  # do a lot of validations, and actually take the longest block chain.
-  #
-  # The reason why the client take this way is its performance.
-  # I can imagine a lot of code to realize this in C++, however,
-  # doing it in Ruby is painful and also it's not ciritical to explain how Bitcoin client works.
-  #
-  def is_young_block(hash)
-    (@data[:blocks][hash][:timestamp] - Time.now.to_i).abs <= 60 * 60 && !is_too_high(hash)
+    @blockchain.save_data
   end
 
   #
@@ -1040,8 +1091,8 @@ class Network
       # Me <- verack  -- You
 
       # You've got the last block height.
-      @data[:last_height] = message[:height]
-      save_data
+      @blockchain.last_height = message[:height]
+      @blockchain.save_data
 
       write_message({command: :verack})
 
@@ -1066,11 +1117,11 @@ class Network
     when :merkleblock
       @received_data += 1
 
-      @data[:blocks][message[:hash]] = message
+      @blockchain.blocks[message[:hash]] = message
 
-      # Described in is_young_block().
+      # Described in Blockchain#is_young_block.
       # It supposes that blocks are sent in its height order. Don't try this at real code.
-      unless is_young_block(message[:hash])
+      unless @blockchain.is_young_block(message[:hash])
         @last_hash = { timestamp: message[:timestamp], hash: message[:hash] }
       end
 
@@ -1079,7 +1130,7 @@ class Network
     when :tx
       @received_data += 1
 
-      @data[:txs][message[:hash]] = message
+      @blockchain.txs[message[:hash]] = message
 
       return true if @requested_data <= @received_data && send_getblocks
 
@@ -1093,22 +1144,6 @@ class Network
     end
 
     return false
-  end
-
-  #
-  # Set spent flags for all tx_outs.
-  # If the tx_out is already spent on another transaction's tx_in, it will be set.
-  # 
-  def set_spent_for_tx_outs
-    @data[:txs].each do |tx_hash, tx|
-      tx[:tx_in].each do |tx_in|
-        hash = tx_in[:previous_output][:hash]
-        index = tx_in[:previous_output][:index]
-        if @data[:txs].has_key?(hash)
-          @data[:txs][hash][:tx_out][index][:spent] = true
-        end
-      end
-    end
   end
 
   #
