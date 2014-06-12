@@ -392,28 +392,24 @@ class Message
   # Read a message and parse it using message definitions.
   #
   def read(socket)
-    magic    = socket.read(4)
-    command  = socket.read(12).unpack('A12').first.to_sym
-    length   = socket.read(4).unpack('V').first
-    checksum = socket.read(4)
-    payload  = socket.read(length)
+    packet = read_packet(socket)
 
     expected_magic    = [IS_TESTNET ? '0b110907' : 'f9beb4d9'].pack('V')
-    expected_checksum = Key.hash256(payload)[0, 4]
+    expected_checksum = Key.hash256(packet[:payload])[0, 4]
 
-    if magic != expected_magic
+    if packet[:magic] != expected_magic
       raise 'invalid magic received'
     end
 
-    if checksum != expected_checksum
+    if packet[:checksum] != expected_checksum
       raise 'incorrect checksum'
     end
 
-    unless is_defined?(command)
+    unless is_defined?(packet[:command])
       raise 'incorrect checksum'
     end
 
-    deserialize(command, payload)
+    deserialize(packet[:command], packet[:payload])
   end
 
   #
@@ -443,6 +439,16 @@ class Message
   end
 
   private
+
+  def read_packet(socket)
+    magic    = socket.read(4)
+    command  = socket.read(12).unpack('A12').first.to_sym
+    length   = socket.read(4).unpack('V').first
+    checksum = socket.read(4)
+    payload  = socket.read(length)
+
+    { magic: magic, command: command, checksum: checksum, payload: payload }
+  end
 
   #
   # Higher order function to generate array serializer / deserializer
@@ -1011,15 +1017,19 @@ class Network
     })
   end
 
+  def refresh_status
+    weight = 50
+    perc = (weight * @blockchain.blocks.length / @blockchain.last_height).to_i
+    @status = '|' + '=' * perc + '_' * (weight - perc) +
+      "| #{(@blockchain.blocks.length - 1)} / #{@blockchain.last_height} "
+  end
+
   #
   # Send getblocks message until it receive all the blocks.
   # If it receives all the blocks, it will return true. Otherwise, it returns false.
   #
   def send_getblocks
-    weight = 50
-    perc = (weight * @blockchain.blocks.length / @blockchain.last_height).to_i
-    @status = '|' + '=' * perc + '_' * (weight - perc) +
-      "| #{(@blockchain.blocks.length - 1)} / #{@blockchain.last_height} "
+    refresh_status
 
     # @blockchain.blocks.length includes block #0 while @blockchain.last_height does not.
     if @blockchain.blocks.length > @blockchain.last_height
