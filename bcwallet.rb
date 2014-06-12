@@ -771,7 +771,7 @@ class Blockchain
     # It will be implemented to this client soon.
     total_satoshis = 0
     tx_in = []
-    @blockchain.txs.each do |tx_hash, tx|
+    @data[:txs].each do |tx_hash, tx|
       break if total_satoshis >= amount
 
       matched = nil
@@ -927,7 +927,7 @@ class Network
 
     accumulated = @blockchain.accumulate_txs(from_key, amount)
 
-    payback = accmulated[:total_satoshis] - amount - transaction_fee
+    payback = accumulated[:total_satoshis] - amount - transaction_fee
     raise "you don't have enough balance to pay" unless payback >= 0
 
     # pk_script field is constructed in Bitcoin's scripting system
@@ -937,7 +937,7 @@ class Network
     postfix = ['88ac'].pack('H*')  # OP_EQUALVERIFY OP_CHECKSIG
     
     tx_out = [{ value: amount,  pk_script: (prefix + to_addr_decoded[:data] + postfix) },
-              { value: payback, pk_script: (prefix + public_key_hash + postfix) }]
+              { value: payback, pk_script: (prefix + from_key.to_public_key_hash + postfix) }]
 
     transaction = {
       command: :tx,
@@ -950,7 +950,7 @@ class Network
 
     # We have generated all data without signatures, so we're now going to generate signatures.
     # However, it is very complicated one.
-    @created_transaction = sign_transaction(transaction)
+    @created_transaction = sign_transaction(from_key, transaction)
 
     @status = ''
   end
@@ -1173,10 +1173,10 @@ class Network
     return false
   end
 
-  def sign_transaction(transaction)
+  def sign_transaction(from_key, transaction)
     signatures = []
 
-    tx_in.each_with_index do |tx_in_elm, i|
+    transaction[:tx_in].each_with_index do |tx_in_elm, i|
       duplicated = transaction.dup
       duplicated[:tx_in] = duplicated[:tx_in].dup
       duplicated[:tx_in][i] = duplicated[:tx_in][i].dup
