@@ -1188,40 +1188,41 @@ class Network
     # However, it is very complicated one.
     signatures = []
 
-    transaction[:tx_in].each_with_index do |tx_in_elm, i|
-      duplicated = transaction.dup
-      duplicated[:tx_in] = duplicated[:tx_in].dup
-      duplicated[:tx_in][i] = duplicated[:tx_in][i].dup
-
-      # To generate signature, you need hash256 of the whole transaction in special form.
-      # The transaction in that form is different from usual one,
-      # because the signature_script field in the tx_in to sign is
-      # replaced with pk_script in previous tx_out,
-      # and other tx_ins' signature_scripts are empty.
-      # (make sure that var_int for the length is also set to zero)
-      #
-      # For better understanding, see: 
-      #   https://en.bitcoin.it/w/images/en/7/70/Bitcoin_OpCheckSig_InDetail.png
-      #
-
-      duplicated[:tx_in][i][:signature_script] = tx_in_elm[:pk_script]
-
-      payload = @message.serialize(duplicated)
-
-      # hash256 includes type code field (see the figure in the URL above)
-      verified_str = Key.hash256(payload + [1].pack('V'))
-
-      signatures.push from_key.sign(verified_str)
+    transaction[:tx_in].length.times do |i|
+      signatures.push(sign_transaction_of_idx(i))
     end
 
-    # see the figure in the URL above
     signatures.each_with_index do |signature, i|
-      transaction[:tx_in][i][:signature_script] =
-        [signature.length + 1].pack('C') + signature + [1].pack('C') +
-        [from_key.to_public_key.length].pack('C') + from_key.to_public_key
+      transaction[:tx_in][i][:signature_script] = generate_signature_script(signature, from_key)
     end
 
     return transaction
+  end
+
+  def sign_transaction_of_idx(from_key, transaction, i)
+    duplicated            = transaction.dup
+    duplicated[:tx_in]    = duplicated[:tx_in].dup
+    duplicated[:tx_in][i] = duplicated[:tx_in][i].dup
+
+    # To generate signature, you need hash256 of the whole transaction in special form.
+    # The transaction in that form is different from usual one,
+    # because the signature_script field in the tx_in to sign is
+    # replaced with pk_script in previous tx_out,
+    # and other tx_ins' signature_scripts are empty.
+    # (make sure that var_int for the length is also set to zero)
+    #
+    # For better understanding, see: 
+    #   https://en.bitcoin.it/w/images/en/7/70/Bitcoin_OpCheckSig_InDetail.png
+    #
+
+    duplicated[:tx_in][i][:signature_script] = transaction[:tx_in][i][:pk_script]
+
+    payload = @message.serialize(duplicated)
+
+    # hash256 includes type code field (see the figure in the URL above)
+    verified_str = Key.hash256(payload + [1].pack('V'))
+
+    from_key.sign(verified_str)
   end
 
   def generate_pk_script(public_key_hash)
@@ -1232,6 +1233,18 @@ class Network
     postfix = ['88ac'].pack('H*')  # OP_EQUALVERIFY OP_CHECKSIG
 
     prefix + public_key_hash + postfix
+  end
+
+  def generate_signature_script(signature, from_key)
+    # see the figure in the
+    #   https://en.bitcoin.it/w/images/en/7/70/Bitcoin_OpCheckSig_InDetail.png
+
+    public_key = from_key.to_public_key
+
+    script = [signature.length + 1].pack('C') + signature + [1].pack('C')
+    script += [public_key.length].pack('C') + public_key
+
+    script
   end
 end
 
