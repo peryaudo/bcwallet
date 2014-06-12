@@ -1109,68 +1109,84 @@ class Network
     message = @message.read(@socket)
 
     case message[:command]
-    when :version
-      # This is handshake process: 
+    when :version     then dispatch_version(message)
+    when :verack      then dispatch_verack(message)
+    when :inv         then dispatch_inv(message)
+    when :merkleblock then dispatch_merkleblock(message)
+    when :tx          then dispatch_tx(message)
+    when :getdata     then dispatch_getdata(message)
+    end
+  end
 
-      # Me -- version -> You
-      # Me <- version -- You
-      # Me -- verack  -> You
-      # Me <- verack  -- You
+  def dispatch_version(message)
+    # This is handshake process: 
 
-      # You've got the last block height.
-      @blockchain.last_height = message[:height]
-      @blockchain.save_data
+    # Me -- version -> You
+    # Me <- version -- You
+    # Me -- verack  -> You
+    # Me <- verack  -- You
 
-      @message.write(@socket, {command: :verack})
+    # You've got the last block height.
+    @blockchain.last_height = message[:height]
+    @blockchain.save_data
 
-    when :verack
-      # Handshake finished, so you can do anything you want.
+    @message.write(@socket, {command: :verack})
 
-      # Set Bloom filter
-      send_filterload
+    false
+  end
 
-      # Tell the remote host to send transactions (inv) it has in its memory pool.
-      @message.write(@socket, {command: :mempool})
+  def dispatch_verack(message)
+    # Handshake finished, so you can do anything you want.
 
-      # Send getblocks on demand and return true
-      return true if send_getblocks
+    # Set Bloom filter
+    send_filterload
 
-    when :inv
-      send_getdata message[:inventory]
+    # Tell the remote host to send transactions (inv) it has in its memory pool.
+    @message.write(@socket, {command: :mempool})
 
-      # Memorize number of requests to check whether the client have received all transactions it required.
-      @requested_data += message[:inventory].length
+    # Send getblocks on demand and return true
+    send_getblocks
+  end
 
-    when :merkleblock
-      @received_data += 1
+  def dispatch_inv(message)
+    send_getdata message[:inventory]
 
-      @blockchain.blocks[message[:hash]] = message
+    # Memorize number of requests to check whether the client have received all transactions it required.
+    @requested_data += message[:inventory].length
 
-      # Described in Blockchain#is_young_block.
-      # It supposes that blocks are sent in its height order. Don't try this at real code.
-      unless @blockchain.is_young_block(message[:hash])
-        @last_hash = { timestamp: message[:timestamp], hash: message[:hash] }
-      end
+    false
+  end
 
-      return true if @requested_data <= @received_data && send_getblocks
 
-    when :tx
-      @received_data += 1
+  def dispatch_merkleblock(message)
+    @received_data += 1
 
-      @blockchain.txs[message[:hash]] = message
+    @blockchain.blocks[message[:hash]] = message
 
-      return true if @requested_data <= @received_data && send_getblocks
-
-    when :getdata
-      @status = 'sending transaction data ... '
-
-      # Send the transaction you create
-      send_transaction
-      
-      return true
+    # Described in Blockchain#is_young_block.
+    # It supposes that blocks are sent in its height order. Don't try this at real code.
+    unless @blockchain.is_young_block(message[:hash])
+      @last_hash = { timestamp: message[:timestamp], hash: message[:hash] }
     end
 
-    return false
+    @requested_data <= @received_data && send_getblocks
+  end
+
+  def dispatch_tx(message)
+    @received_data += 1
+
+    @blockchain.txs[message[:hash]] = message
+
+    @requested_data <= @received_data && send_getblocks
+  end
+
+  def dispatch_getdata(message)
+    @status = 'sending transaction data ... '
+
+    # Send the transaction you create
+    send_transaction
+
+    true
   end
 
   def sign_transaction(from_key, transaction)
