@@ -392,18 +392,26 @@ class Message
   # Read a message and parse it using message definitions.
   #
   def read(socket)
-    magic = socket.read(4).unpack('H*').first
-    raise 'invalid magic received' if magic != (IS_TESTNET ? '0b110907' : 'f9beb4d9')
-
+    magic    = socket.read(4)
     command  = socket.read(12).unpack('A12').first.to_sym
     length   = socket.read(4).unpack('V').first
     checksum = socket.read(4)
+    payload  = socket.read(length)
 
-    payload = socket.read(length)
+    expected_magic    = [IS_TESTNET ? '0b110907' : 'f9beb4d9'].pack('V')
+    expected_checksum = Key.hash256(payload)[0, 4]
 
-    raise 'incorrect checksum' if Key.hash256(payload)[0, 4] != checksum
+    if magic != expected_magic
+      raise 'invalid magic received'
+    end
 
-    raise "unknown message #{command}" unless is_defined?(command)
+    if checksum != expected_checksum
+      raise 'incorrect checksum'
+    end
+
+    unless is_defined?(command)
+      raise 'incorrect checksum'
+    end
 
     deserialize(command, payload)
   end
