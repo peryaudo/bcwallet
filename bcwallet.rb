@@ -102,7 +102,7 @@ class Key
 
     res = num.to_s(16)
 
-    if res % 2 == 1
+    if res.length % 2 == 1
       res = '0' + res
     end
 
