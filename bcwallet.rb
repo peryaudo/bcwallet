@@ -109,7 +109,7 @@ class Key
     # restore leading zeroes
     encoded.each_char do |c|
       break if c != BASE58[0]
-      res += '00'
+      res = '00' + res
     end
 
     [res].pack('H*')

@@ -1,3 +1,5 @@
+#!/usr/bin/env ruby
+
 if ENV['CI'] then
   require 'coveralls'
   Coveralls.wear!
@@ -21,6 +23,10 @@ class TestKey < MiniTest::Unit::TestCase
 
   def test_base58_encode_decode
     assert_equal 'foobarbazhoge', Key.decode_base58(Key.encode_base58('foobarbazhoge'))
+  end
+
+  def test_base58_encode_decode_when_begin_with_00
+    assert_equal [0x00, 0x01, 0x02], Key.decode_base58(Key.encode_base58([0x00, 0x01, 0x02].pack('C*'))).unpack('C*')
   end
 
   def test_key_generation
