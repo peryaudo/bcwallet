@@ -117,7 +117,7 @@ class Key
 
   #
   # Base58 with the type of data and the checksum is called Base58Check in Bitcoin protocol.
-  # It is used as a Bitcoin address, human-readable private key, and so on.
+  # It is used as a Bitcoin address, human-readable private key, etc.
   #
   def self.encode_base58check(type, plain)
     leading_bytes = {
@@ -202,8 +202,8 @@ end
 #
 # A class which generates Bloom filter.
 # Bloom filter is a data structure used in Bitcoin to filter transactions for SPV clients.
-# It enables you to quickly test an element is included in a set,
-# but may have false positives. (probabilistic data structure)
+# It enables you to quickly test whether an element is included in a set,
+# but may have false positives (i.e. probabilistic data structure).
 #
 class BloomFilter
   public
@@ -231,7 +231,7 @@ class BloomFilter
 
   #
   # The hash functions is called MurmurHash3 (32-bit).
-  # Reference implementation is somewhat tricky one, 
+  # Reference implementation is somewhat tricky one,
   # so I recommend you to read bitcoinj's one if you want to know the detail.
   #
   def hash(seed, data)
@@ -686,7 +686,7 @@ class Blockchain
   end
 
   def calc_last_hash
-    # These hashes are genesis blocks'.
+    # These hashes are genesis blocks' ones.
     last_hash = { timestamp: 0,
                    hash: [IS_TESTNET ?
                      '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943' :
@@ -747,15 +747,15 @@ class Blockchain
   end
 
   #
-  # This is a heuristic function, to find out whether the block is independent young block,
-  # which is not actually the last block you received through getblocks -> inv -> getdata iteration.
+  # This is a heuristic function to find out whether the block is an independent young block.
+  # An independent block here means a block which have not received one of its ancestors yet.
+  # We may receive this kind of blocks regardless of getblocks -> inv -> getdata iteration.
   #
-  # In a more robust way, you have to construct graph from received blocks,
+  # To implement it more robustly, you have to construct graph from received blocks,
   # do a lot of validations, and actually take the longest block chain.
   #
-  # The reason why the client take this way is its performance.
-  # I can imagine a lot of code to realize this in C++, however,
-  # doing it in Ruby is painful and also it's not ciritical to explain how Bitcoin client works.
+  # The reason why the client took this way is simplicity and performance.
+  # Doing them in Ruby is painful, and also it's not ciritical to explain how Bitcoin client works.
   #
   def is_young_block(hash)
     (@data[:blocks][hash][:timestamp] - Time.now.to_i).abs <= 60 * 60 && !is_too_high(hash)
@@ -764,7 +764,7 @@ class Blockchain
   def accumulate_txs(from_key, amount)
     public_key_hash = from_key.to_public_key_hash
 
-    # refresh spent flags of tx_outs
+    # Refresh spent flags of tx_outs
     set_spent_for_tx_outs!
 
     # In a real SPV client, we should walk along merkle trees to validate the transaction.
@@ -850,9 +850,8 @@ class Blockchain
 end
 
 #
-# The network class. It should be separated into two or three classes
-# to manage multiple connections in real implementation.
-# However, since this is a extremely simplified implementation, they are integrated into this class.
+# The network class. It may be split into two or three classes
+# to manage multiple connections and features in production.
 #
 class Network
   attr_reader :status, :data
@@ -1158,7 +1157,7 @@ class Network
     @blockchain.blocks[message[:hash]] = message
 
     # Described in Blockchain#is_young_block.
-    # It supposes that blocks are sent in its height order. Don't try this at real code.
+    # It supposes that blocks are sent in its height order. Don't try this in production code.
     unless @blockchain.is_young_block(message[:hash])
       @last_hash = { timestamp: message[:timestamp], hash: message[:hash] }
     end
@@ -1205,13 +1204,12 @@ class Network
     duplicated[:tx_in][i] = duplicated[:tx_in][i].dup
 
     # To generate signature, you need hash256 of the whole transaction in special form.
-    # The transaction in that form is different from usual one,
-    # because the signature_script field in the tx_in to sign is
-    # replaced with pk_script in previous tx_out,
+    # The transaction in that form is different in a way that the signature_script
+    # field in the tx_in to sign is replaced with pk_script in previous tx_out,
     # and other tx_ins' signature_scripts are empty.
     # (make sure that var_int for the length is also set to zero)
     #
-    # For better understanding, see: 
+    # For further information, see: 
     #   https://en.bitcoin.it/w/images/en/7/70/Bitcoin_OpCheckSig_InDetail.png
     #
 
