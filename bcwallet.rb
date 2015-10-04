@@ -1383,7 +1383,7 @@ class BCWallet
   def export(name)
     return usage "an address named #{name} doesn't exist" unless @keys.has_key?(name)
 
-    STDERR.print "Are you sure you want to export private key for \"#{name}\"? (yes/no): "
+    STDERR.print "Are you sure you want to export private key for \"#{name}\"? (yes/NO): "
 
     if STDIN.gets.chomp.downcase == 'yes'
       puts @keys[name].to_private_key_s

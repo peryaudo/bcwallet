@@ -152,3 +152,24 @@ class TestMessage < MiniTest::Test
   end
 
 end
+
+class TestBCWallet < MiniTest::Test
+  def test_generate_list
+    key_file_name = Tempfile.open('keys')
+    data_file_name = Tempfile.open('data')
+
+    assert_output /new Bitcoin address "peryaudo" generated/ do
+      BCWallet.new(['generate', 'peryaudo'], key_file_name, data_file_name).run
+    end
+
+    assert_output nil, /the name "peryaudo" already exists/ do
+      BCWallet.new(['generate', 'peryaudo'], key_file_name, data_file_name).run
+    end
+
+    assert_output /peryaudo/ do
+      BCWallet.new(['list'], key_file_name, data_file_name).run
+    end
+  end
+
+  # TODO(peryaudo): Test export & balance commands
+end
