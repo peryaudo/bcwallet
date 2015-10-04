@@ -5,12 +5,10 @@ if ENV['CI'] then
   Coveralls.wear!
 end
 
-require 'minitest/unit'
+require 'minitest/autorun'
 require './bcwallet'
 
-MiniTest::Unit.autorun
-
-class TestKey < MiniTest::Unit::TestCase
+class TestKey < MiniTest::Test
   def test_base58_encode
     assert_equal '2cFupjhnEsSn59qHXstmK2ffpLv2',
       Key.encode_base58(['73696d706c792061206c6f6e6720737472696e67'].pack('H*'))
@@ -40,7 +38,7 @@ class TestKey < MiniTest::Unit::TestCase
   end
 end
 
-class TestBloomFilter < MiniTest::Unit::TestCase
+class TestBloomFilter < MiniTest::Test
   def test_murmur_hash
     bf = BloomFilter.new(1, 1, 1)
     assert_equal 0x2a2884ba, bf.hash(0xabcdef, "hogehoge")
@@ -50,7 +48,7 @@ class TestBloomFilter < MiniTest::Unit::TestCase
   end
 end
 
-class TestMessage < MiniTest::Unit::TestCase
+class TestMessage < MiniTest::Test
   def test_version_message_serialize
     m = Message.new
     b = m.serialize({
