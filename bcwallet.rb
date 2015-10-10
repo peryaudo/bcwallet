@@ -18,7 +18,7 @@ IS_TESTNET = true
 
 # Remote host to use: It is recommended to use this client with a local client.
 # Install Bitcoin-Qt and then launch with -testnet option to connect Testnet.
-HOST = 'localhost'
+HOST = '52.4.156.236'
 
 # This software is licensed under the MIT license.
 #
@@ -316,6 +316,8 @@ class Message
         [:height,    :uint32],
         [:relay,     :relay_flag]
       ],
+      ping:    [[:nonce, :uint64]],
+      pong:    [[:nonce, :uint64]],
       verack:  [],
       mempool: [],
       addr:    [[:addr, array_for(:net_addr)]],
@@ -367,10 +369,6 @@ class Message
     }
   end
 
-  def is_defined?(message)
-    @message_definitions.has_key?(message)
-  end
-
   #
   # Serialize a message using message definitions.
   #
@@ -386,7 +384,7 @@ class Message
   # Deserialize a message using message definitions.
   #
   def deserialize(command, payload)
-    raise unless is_defined?(command)
+    raise unless @message_definitions.has_key?(command)
 
     @payload = payload
 
@@ -413,8 +411,9 @@ class Message
       raise 'incorrect checksum'
     end
 
-    unless is_defined?(packet[:command])
-      raise 'incorrect checksum'
+    unless @message_definitions.has_key?(packet[:command])
+      p packet
+      raise 'invalid message type'
     end
 
     deserialize(packet[:command], packet[:payload])
@@ -957,7 +956,7 @@ class Network
 
   private
 
-  PROTOCOL_VERSION = 70001
+  PROTOCOL_VERSION = 70002
 
   #
   # Send version message to the remote host.
@@ -1103,7 +1102,7 @@ class Network
 
     case message[:command]
     when :version     then dispatch_version(message)
-    when :verack      then dispatch_verack(message)
+    when :ping        then dispatch_ping(message)
     when :inv         then dispatch_inv(message)
     when :merkleblock then dispatch_merkleblock(message)
     when :tx          then dispatch_tx(message)
@@ -1114,12 +1113,14 @@ class Network
   def dispatch_version(message)
     # This is handshake process: 
 
-    # Me -- version -> You
-    # Me <- version -- You
-    # Me -- verack  -> You
-    # Me <- verack  -- You
+    # Local -- version -> Remote
+    # Local <- version -- Remote
+    # Local -- verack  -> Remote
+    # Local <- verack  -- Remote
+    # Local <- ping    -- Remote
+    # Loacl -- pong    -> Remote
 
-    # You've got the last block height.
+    # You've got the latest block height.
     @blockchain.last_height = message[:height]
     @blockchain.save_data
 
@@ -1128,7 +1129,10 @@ class Network
     false
   end
 
-  def dispatch_verack(message)
+  def dispatch_ping(message)
+    # Reply with pong
+    @message.write(@socket, {command: :pong, nonce: message[:nonce]})
+
     # Handshake finished, so you can do anything you want.
 
     # Set Bloom filter
@@ -1139,6 +1143,7 @@ class Network
 
     # Send getblocks on demand and return true
     send_getblocks
+
   end
 
   def dispatch_inv(message)
@@ -1149,7 +1154,6 @@ class Network
 
     false
   end
-
 
   def dispatch_merkleblock(message)
     @received_data += 1
