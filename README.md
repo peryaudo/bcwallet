@@ -65,3 +65,4 @@ THE SOFTWARE.
 ## ToDo
 
 * Write Merkle tree validation for transactions
+* Rewrite with Fiber
