@@ -18,7 +18,7 @@ IS_TESTNET = true
 
 # Remote host to use: It is recommended to use this client with a local client.
 # Install Bitcoin-Qt and then launch with -testnet option to connect Testnet.
-HOST = '52.4.156.236'
+HOST = 'localhost'
 
 # This software is licensed under the MIT license.
 #
