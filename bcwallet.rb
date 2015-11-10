@@ -412,7 +412,6 @@ class Message
     end
 
     unless @message_definitions.has_key?(packet[:command])
-      p packet
       raise 'invalid message type'
     end
 
@@ -1014,7 +1013,7 @@ class Network
   def refresh_status
     weight = 50
     perc = (weight * @blockchain.blocks.length / @blockchain.last_height).to_i
-    @status = '|' + '=' * perc + '_' * (weight - perc) +
+    @status = '|' + '=' * perc + '_' * [weight - perc, 0].max +
       "| #{(@blockchain.blocks.length - 1)} / #{@blockchain.last_height} "
   end
 
@@ -1093,7 +1092,6 @@ class Network
   #
   # Dispatch messages. It reads message from the remote host,
   # send proper messages back, and then again wait for a message.
-  # It's like Win32 event procedure.
   #
   # Returns true if the whole process has been finished, otherwise false.
   #
@@ -1118,7 +1116,7 @@ class Network
     # Local -- verack  -> Remote
     # Local <- verack  -- Remote
     # Local <- ping    -- Remote
-    # Loacl -- pong    -> Remote
+    # Local -- pong    -> Remote
 
     # You've got the latest block height.
     @blockchain.last_height = message[:height]
