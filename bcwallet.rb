@@ -1335,18 +1335,18 @@ class BCWallet
     cur = 0
 
     while !@network.sync_finished?
-      STDERR.print "#{@network.status}#{rotate[cur]}\r"
+      $stderr.print "#{@network.status}#{rotate[cur]}\r"
 
       cur = (cur + 1) % rotate.length
 
       sleep 0.1
     end
 
-    STDERR.print "#{@network.status}done.\n"
+    $stderr.print "#{@network.status}done.\n"
     if mode == :tx
-      STDERR.print "Transaction sent.\n\n"
+      $stderr.print "Transaction sent.\n\n"
     else
-      STDERR.print "Block chain synchronized.\n\n"
+      $stderr.print "Block chain synchronized.\n\n"
     end
   end
 
@@ -1385,15 +1385,15 @@ class BCWallet
   def export(name)
     return usage "an address named #{name} doesn't exist" unless @keys.has_key?(name)
 
-    STDERR.print "Are you sure you want to export private key for \"#{name}\"? (yes/NO): "
+    $stderr.print "Are you sure you want to export private key for \"#{name}\"? (yes/NO): "
 
-    if STDIN.gets.chomp.downcase == 'yes'
+    if $stdin.gets.chomp.downcase == 'yes'
       puts @keys[name].to_private_key_s
     end
   end
 
   def balance
-    STDERR.print "loading data ...\r"
+    $stderr.print "loading data ...\r"
 
     init_network
     wait_for_sync
@@ -1407,11 +1407,11 @@ class BCWallet
   end
 
   def confirm_send(name, to, amount)
-    STDERR.print "Are you sure you want to send\n"
-    STDERR.print "    #{sprintf('%.8f', satoshi_to_btc(amount))} BTC\n"
-    STDERR.print "from\n    \"#{name}\"\nto\n    \"#{to}\"\n? (yes/no): "
+    $stderr.print "Are you sure you want to send\n"
+    $stderr.print "    #{sprintf('%.8f', satoshi_to_btc(amount))} BTC\n"
+    $stderr.print "from\n    \"#{name}\"\nto\n    \"#{to}\"\n? (yes/no): "
 
-    STDIN.gets.chomp.downcase == 'yes'
+    $stdin.gets.chomp.downcase == 'yes'
   end
 
   def send(name, to, amount)

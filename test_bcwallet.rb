@@ -156,6 +156,25 @@ class TestMessage < MiniTest::Test
 end
 
 class TestBCWallet < MiniTest::Test
+  def test_invalid_arguments
+    Dir.mktmpdir do |dir|
+      key_file_name = "#{dir}/keys"
+      data_file_name = "#{dir}/data"
+
+      assert_output nil, /Usage\: ruby bcwallet\.rb/ do
+        BCWallet.new([''], key_file_name, data_file_name).run
+      end
+
+      assert_output nil, /bcwallet\.rb: invalid command/ do
+        BCWallet.new(['foo'], key_file_name, data_file_name).run
+      end
+
+      assert_output nil, /bcwallet.rb: missing arguments/ do
+        BCWallet.new(['export'], key_file_name, data_file_name).run
+      end
+    end
+  end
+
   def test_generate_list
     Dir.mktmpdir do |dir|
       key_file_name = "#{dir}/keys"
@@ -175,10 +194,31 @@ class TestBCWallet < MiniTest::Test
     end
   end
 
+  def test_export
+    Dir.mktmpdir do |dir|
+      key_file_name = "#{dir}/keys"
+      data_file_name = "#{dir}/data"
+
+      assert_output /new Bitcoin address "peryaudo" generated/ do
+        BCWallet.new(['generate', 'peryaudo'], key_file_name, data_file_name).run
+      end
+
+      $stdin = StringIO.new('yes', 'r')
+
+      assert_output nil, /Are you sure you want to export private key for "peryaudo"/ do
+        BCWallet.new(['export', 'peryaudo'], key_file_name, data_file_name).run
+      end
+    end
+  end
+
   def test_balance
     Dir.mktmpdir do |dir|
       key_file_name = "#{dir}/keys"
       data_file_name = "#{dir}/data"
+
+      assert_output /new Bitcoin address "peryaudo" generated/ do
+        BCWallet.new(['generate', 'peryaudo'], key_file_name, data_file_name).run
+      end
 
       stream = StringIO.new(
         [ # version
@@ -227,11 +267,11 @@ class TestBCWallet < MiniTest::Test
 
       TCPSocket.stub :open, stream do
         timeout 10 do
-          BCWallet.new(['balance'], key_file_name, data_file_name).run
+          assert_output /peryaudo: 0\.00000000 BTC/, nil do
+            BCWallet.new(['balance'], key_file_name, data_file_name).run
+          end
         end
       end
     end
   end
-
-  # TODO(peryaudo): Test export command
 end
