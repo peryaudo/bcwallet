@@ -1426,7 +1426,12 @@ class BCWallet
     wait_for_sync
 
     if confirm_send(name, to, amount)
-      @network.send(@keys[name], to, amount)
+      begin
+        @network.send(@keys[name], to, amount)
+      rescue => e
+        warn "bcwallet.rb: #{e}"
+        return
+      end
       wait_for_sync
     end
   end
