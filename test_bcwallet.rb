@@ -180,6 +180,10 @@ class TestBCWallet < MiniTest::Test
       key_file_name = "#{dir}/keys"
       data_file_name = "#{dir}/data"
 
+      assert_output /No addresses available/, nil do
+        BCWallet.new(['list'], key_file_name, data_file_name).run
+      end
+
       assert_output /new Bitcoin address "peryaudo" generated/ do
         BCWallet.new(['generate', 'peryaudo'], key_file_name, data_file_name).run
       end
@@ -271,6 +275,13 @@ class TestBCWallet < MiniTest::Test
             BCWallet.new(['balance'], key_file_name, data_file_name).run
           end
         end
+
+      end
+
+      assert_output /merkleblock/, nil do
+        BCWallet.new(
+          ['block', '000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943'],
+          key_file_name, data_file_name).run
       end
     end
   end

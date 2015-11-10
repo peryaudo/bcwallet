@@ -953,6 +953,11 @@ class Network
     @blockchain.get_balance(@keys)
   end
 
+
+  def block(hash)
+    @blockchain.blocks[hash]
+  end
+
   private
 
   PROTOCOL_VERSION = 70002
@@ -1428,7 +1433,7 @@ class BCWallet
 
   def block(hash)
     init_network
-    p @network.data[:blocks][[hash].pack('H*').reverse]
+    puts @network.block([hash].pack('H*').reverse)
   end
 end
 
