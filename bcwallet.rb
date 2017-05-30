@@ -318,6 +318,7 @@ class Message
       ],
       ping:    [[:nonce, :uint64]],
       pong:    [[:nonce, :uint64]],
+      alert:   [],
       verack:  [],
       mempool: [],
       addr:    [[:addr, array_for(:net_addr)]],
